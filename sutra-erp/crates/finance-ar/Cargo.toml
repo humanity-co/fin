@@ -1,0 +1,15 @@
+[package]
+name = "sutra-finance-ar"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sutra-core = { path = "../core" }
+sutra-events = { path = "../events" }
+
+serde.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+rust_decimal.workspace = true

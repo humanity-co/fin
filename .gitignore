@@ -1,0 +1,32 @@
+# Rust
+/target/
+**/target/
+/tmp/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Node
+node_modules/
+dist/
+.svelte-kit/
+.vite/
+
+# Build artifacts
+*.o
+*.so
+*.dylib
+
+# Logs
+*.log

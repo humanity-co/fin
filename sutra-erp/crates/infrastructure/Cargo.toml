@@ -1,0 +1,29 @@
+[package]
+name = "sutra-infrastructure"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sutra-core = { path = "../core" }
+
+# Database
+sqlx.workspace = true
+
+# Redis
+deadpool-redis.workspace = true
+redis.workspace = true
+
+# Config
+dotenvy.workspace = true
+config.workspace = true
+
+# Telemetry
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+
+# Async
+tokio.workspace = true
+
+# Serde
+serde.workspace = true

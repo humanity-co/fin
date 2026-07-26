@@ -1,0 +1,35 @@
+[package]
+name = "sutra-api"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sutra-core = { path = "../core" }
+sutra-infrastructure = { path = "../infrastructure" }
+sutra-events = { path = "../events" }
+sutra-finance-gl = { path = "../finance-gl" }
+
+# HTTP
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+hyper.workspace = true
+
+# Async
+tokio.workspace = true
+
+# Serde
+serde.workspace = true
+serde_json.workspace = true
+
+# UUID
+uuid.workspace = true
+
+# Chrono
+chrono.workspace = true
+
+# Tracing
+tracing.workspace = true
+
+# Error
+thiserror.workspace = true

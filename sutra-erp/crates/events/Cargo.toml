@@ -1,0 +1,13 @@
+[package]
+name = "sutra-events"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sutra-core = { path = "../core" }
+
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+async-trait.workspace = true

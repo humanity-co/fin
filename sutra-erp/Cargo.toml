@@ -1,0 +1,85 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/infrastructure",
+    "crates/events",
+    "crates/api",
+    "crates/finance-gl",
+    "crates/finance-ar",
+    "crates/finance-ap",
+    "crates/finance-treasury",
+    "crates/finance-taxation",
+    "crates/finance-budgeting",
+    "crates/finance-assets",
+    "crates/compliance",
+    "crates/workflow",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "UNLICENSED"
+repository = "https://github.com/sutra-erp/sutra-erp"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_with = "3"
+
+# UUID
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+
+# Chrono / time
+chrono = { version = "0.4", features = ["serde"] }
+time = { version = "0.3", features = ["serde", "macros"] }
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "migrate"] }
+
+# Redis
+deadpool-redis = "0.17"
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+
+# HTTP & API
+axum = { version = "0.7", features = ["macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "request-id", "compression-br", "compression-gzip"] }
+hyper = { version = "1", features = ["server"] }
+reqwest = { version = "0.12", features = ["json"] }
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
+
+# Configuration
+dotenvy = "0.15"
+config = "0.14"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Async traits
+async-trait = "0.1"
+
+# Decimal (for tax rates, percentages)
+rust_decimal = { version = "1", features = ["serde"] }
+rust_decimal_macros = "1"
+
+# Logging
+log = "0.4"
+
+# Utilities
+derive_more = { version = "1", features = ["display", "from", "into", "add", "sum", "not", "constructor"] }
+strum = { version = "0.26", features = ["derive"] }
+strum_macros = "0.26"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
