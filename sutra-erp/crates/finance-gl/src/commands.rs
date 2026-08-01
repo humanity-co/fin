@@ -5,7 +5,7 @@
 //! 2. Performs the mutation within a DB transaction
 //! 3. Writes to the outbox for event publishing
 
-use chrono::{NaiveDate, Utc};
+use chrono::{NaiveDate, Utc, Datelike};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tracing::info;
@@ -212,14 +212,14 @@ impl GlCommandHandler {
 
         // Set the journal_id on each line
         for line in &mut journal_lines {
-            line.journal_id = journal_id;
+            line.journal_id = journal_id.clone();
         }
 
         let journal = Journal {
-            journal_id,
+            journal_id: journal_id.clone(),
             tenant_id,
             journal_number,
-            journal_type,
+            journal_type: journal_type.clone(),
             accounting_period_id: cmd.accounting_period_id,
             entity_id: cmd.entity_id,
             fund_id: cmd.fund_id,
@@ -288,7 +288,7 @@ impl GlCommandHandler {
         let tid = *tenant_id.as_uuid();
 
         // Load the journal
-        let mut journal = self
+        let journal = self
             .journal_repo
             .find_by_id(tid, cmd.journal_id)
             .await?
@@ -408,7 +408,7 @@ impl GlCommandHandler {
         for (i, line) in original.lines.iter().enumerate() {
             reversal_lines.push(JournalLine {
                 journal_line_id: Uuid::now_v7(),
-                journal_id: reversal_id,
+                journal_id: reversal_id.clone(),
                 line_number: (i + 1) as i32,
                 account_id: line.account_id,
                 debit_amount: line.credit_amount,
@@ -432,7 +432,7 @@ impl GlCommandHandler {
         }
 
         let reversal = Journal {
-            journal_id: reversal_id,
+            journal_id: reversal_id.clone(),
             tenant_id,
             journal_number: reversal_number,
             journal_type: JournalType::Reversing,
@@ -451,7 +451,7 @@ impl GlCommandHandler {
             lines: reversal_lines,
             posted_at: None,
             posted_by: None,
-            reversed_by_id: Some(original.journal_id),
+            reversed_by_id: Some(original.journal_id.clone()),
             attachment_ids: vec![],
             version: 1,
             audit,

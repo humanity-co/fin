@@ -82,7 +82,19 @@ export async function apiFetch<T = unknown>(
     return undefined as T;
   }
 
-  return response.json() as Promise<T>;
+  const json = await response.json();
+  if (json && typeof json === "object" && "success" in json) {
+    if (json.success) {
+      return json.data as T;
+    } else {
+      throw new ApiRequestError({
+        status: response.status,
+        code: "APP_ERROR",
+        message: json.error || "Unknown application error",
+      });
+    }
+  }
+  return json as T;
 }
 
 // Convenience methods

@@ -159,7 +159,7 @@ fn err_response(status: StatusCode, msg: String) -> (StatusCode, Json<serde_json
         Json(serde_json::json!({
             "success": false,
             "error": msg,
-            "data": null::<()>
+            "data": null
         })),
     )
 }

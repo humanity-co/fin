@@ -223,18 +223,18 @@ impl JournalRepository for PgJournalRepository {
     async fn list(
         &self,
         tenant_id: Uuid,
-        entity_id: Option<Uuid>,
-        period_id: Option<Uuid>,
-        status: Option<&str>,
-        journal_type: Option<&str>,
-        from_date: Option<NaiveDate>,
-        to_date: Option<NaiveDate>,
+        _entity_id: Option<Uuid>,
+        _period_id: Option<Uuid>,
+        _status: Option<&str>,
+        _journal_type: Option<&str>,
+        _from_date: Option<NaiveDate>,
+        _to_date: Option<NaiveDate>,
         page: u32,
         per_page: u32,
     ) -> Result<(Vec<Journal>, i64), GlError> {
         // Build the WHERE clause dynamically
-        let mut conditions = vec!["je.tenant_id = $1".to_string()];
-        let mut params: Vec<Box<dyn sqlx::Encode<'_, Postgres> + Send + Sync>> = Vec::new();
+        let _conditions = vec!["je.tenant_id = $1".to_string()];
+        let _params: Vec<Box<dyn sqlx::Encode<'_, Postgres> + Send + Sync>> = Vec::new();
         // We'll use simple positional binding with explicit casts
 
         // Count query
@@ -358,7 +358,7 @@ impl PgJournalRepository {
         tenant_id: Uuid,
         journal_id: Uuid,
     ) -> Result<Vec<JournalLine>, GlError> {
-        let rows = sqlx::query_as::<_, JournalLineRow>(
+        let rows: Vec<JournalLineRow> = sqlx::query_as::<_, JournalLineRow>(
             r#"
             SELECT
                 journal_line_id, journal_id, line_number, account_id,
@@ -743,7 +743,7 @@ impl JournalRow {
             posted_at: self.posted_at,
             posted_by: self.posted_by,
             reversed_by_id: self.reversed_by_id.map(EntityId::from_uuid),
-            attachment_ids: self.attachment_ids.unwrap_or_default(),
+            attachment_ids: self.attachment_ids.clone().unwrap_or_default(),
             version: self.version,
             audit: AuditInfo {
                 created_by: self.created_by.unwrap_or_else(uuid::Uuid::nil),

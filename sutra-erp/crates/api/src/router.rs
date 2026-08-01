@@ -54,7 +54,6 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     let api_routes = Router::new()
         .route("/health", get(health_check))
         .nest("/gl", routes::gl::gl_routes())
-        .nest("/ar", routes::ar::ar_routes())
         .nest("/ap", routes::ap::ap_routes())
         .with_state(state);
 
@@ -68,5 +67,3 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 async fn health_check() -> &'static str {
     "OK"
 }
-/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
-/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory

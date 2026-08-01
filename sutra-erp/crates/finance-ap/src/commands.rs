@@ -6,10 +6,12 @@
 //! 3. Writes to the outbox for event publishing
 //! 4. Integrates with GL for journal creation
 
-use chrono::{NaiveDate, Utc};
+use chrono::{NaiveDate, Utc, Datelike};
+use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use std::convert::TryInto;
 use tracing::info;
 use uuid::Uuid;
 
@@ -401,8 +403,8 @@ impl ApCommandHandler {
 
             total_amount += line_total;
             if let Some(tr) = tax_rate {
-                if !tr.is_zero() && !is_rcm {
-                    let tax_paise = (line_total_paise as f64 * f64::from(tr) / 100.0) as i64;
+                let tr: rust_decimal::Decimal = tr; if !tr.is_zero() && !is_rcm {
+                    let tax_paise = (line_total_paise as f64 * tr.to_f64().unwrap_or(0.0) / 100.0) as i64;
                     tax_amount += Money::from_paise(tax_paise);
                 }
             }
@@ -410,7 +412,7 @@ impl ApCommandHandler {
             let po_line_id = Uuid::now_v7();
             lines.push(PurchaseOrderLine {
                 po_line_id,
-                purchase_order_id: po_id,
+                purchase_order_id: po_id.clone(),
                 line_number: line_cmd.line_number,
                 item_description: line_cmd.item_description.clone(),
                 hsn_sac_code: line_cmd.hsn_sac_code.clone(),
@@ -418,7 +420,7 @@ impl ApCommandHandler {
                 unit_price: up,
                 discount_percent: discount_pct,
                 tax_rate,
-                tax_type,
+                tax_type: tax_type.clone(),
                 total_amount: line_total,
                 received_quantity: Decimal::ZERO,
                 account_id: line_cmd.account_id,
@@ -444,8 +446,8 @@ impl ApCommandHandler {
             .bind(&line_cmd.hsn_sac_code)
             .bind(line_cmd.quantity.to_string())
             .bind(up.as_paise())
-            .bind(discount_pct.map(|d| d.to_string()))
-            .bind(tax_rate.map(|r| r.to_string()))
+            .bind(discount_pct.map(|d: rust_decimal::Decimal| d.to_string()))
+            .bind(tax_rate.map(|r: rust_decimal::Decimal| r.to_string()))
             .bind(tax_type.map(|t| t.to_db_str().to_string()))
             .bind(line_total.as_paise())
             .bind(Decimal::ZERO.to_string())
@@ -725,7 +727,7 @@ impl ApCommandHandler {
 
             grn_lines.push(GoodsReceiptNoteLine {
                 grn_line_id,
-                goods_receipt_note_id: grn_id,
+                goods_receipt_note_id: grn_id.clone(),
                 po_line_id: line_cmd.po_line_id,
                 received_quantity: recvd,
                 accepted_quantity: accepted,
@@ -849,8 +851,8 @@ impl ApCommandHandler {
 
             let tax_rate = line_cmd.tax_rate.map(|r| Decimal::from_f64(r).unwrap_or_default());
             let line_tax = if let Some(tr) = tax_rate {
-                if !tr.is_zero() && !is_rcm {
-                    let t = (line_total_paise as f64 * f64::from(tr) / 100.0) as i64;
+                let tr: rust_decimal::Decimal = tr; if !tr.is_zero() && !is_rcm {
+                    let t = (line_total_paise as f64 * tr.to_f64().unwrap_or(0.0) / 100.0) as i64;
                     Money::from_paise(t)
                 } else {
                     Money::ZERO
@@ -880,7 +882,7 @@ impl ApCommandHandler {
             .bind(&line_cmd.item_description)
             .bind(line_cmd.quantity.to_string())
             .bind(up.as_paise())
-            .bind(tax_rate.map(|r| r.to_string()))
+            .bind(tax_rate.map(|r: rust_decimal::Decimal| r.to_string()))
             .bind(line_tax.as_paise())
             .bind(line_total.as_paise())
             .bind(line_cmd.account_id)
@@ -891,7 +893,7 @@ impl ApCommandHandler {
 
             lines.push(InvoiceLine {
                 invoice_line_id: inv_line_id,
-                vendor_invoice_id: invoice_id,
+                vendor_invoice_id: invoice_id.clone(),
                 po_line_id: line_cmd.po_line_id,
                 line_number: line_cmd.line_number,
                 item_description: line_cmd.item_description.clone(),
@@ -909,7 +911,7 @@ impl ApCommandHandler {
         if let (Some(section), Some(rate)) = (&tds_section, &tds_rate) {
             let net_for_tds = total_amount + tax_amount;
             let rate_dec = Decimal::from_f64(*rate).unwrap_or_default();
-            let tds_paise = (net_for_tds.as_paise() as f64 * f64::from(rate_dec) / 100.0) as i64;
+            let tds_paise = (net_for_tds.as_paise() as f64 * rate_dec.to_f64().unwrap_or(0.0) / 100.0) as i64;
             tds_amount = Money::from_paise(tds_paise);
         }
 
@@ -1355,7 +1357,7 @@ impl ApCommandHandler {
 
         let tds_amount = if vendor.tds_applicable && effective_tds_rate.is_some() {
             let rate = effective_tds_rate.unwrap_or(Decimal::ZERO);
-            let tds_paise = (amount.as_paise() as f64 * f64::from(rate) / 100.0) as i64;
+            let tds_paise = (amount.as_paise() as f64 * rate.to_f64().unwrap_or(0.0) / 100.0) as i64;
             Money::from_paise(tds_paise)
         } else {
             Money::ZERO
@@ -1395,7 +1397,7 @@ impl ApCommandHandler {
             let alloc_amount = Money::from_rupees(alloc_cmd.allocated_amount);
             let alloc_tds = if vendor.tds_applicable && effective_tds_rate.is_some() {
                 let rate = effective_tds_rate.unwrap_or(Decimal::ZERO);
-                let tds_p = (alloc_amount.as_paise() as f64 * f64::from(rate) / 100.0) as i64;
+                let tds_p = (alloc_amount.as_paise() as f64 * rate.to_f64().unwrap_or(0.0) / 100.0) as i64;
                 Money::from_paise(tds_p)
             } else {
                 Money::ZERO
@@ -1419,7 +1421,7 @@ impl ApCommandHandler {
 
             allocations.push(PaymentAllocation {
                 vendor_payment_alloc_id: alloc_id,
-                payment_id,
+                payment_id: payment_id.clone(),
                 invoice_id: alloc_cmd.invoice_id,
                 allocated_amount: alloc_amount,
                 tds_amount: alloc_tds,
@@ -1784,7 +1786,7 @@ async fn get_effective_tds_rate(
     .await?;
 
     if let Some(rate_str) = cert_rate {
-        if let Ok(rate) = rate_str.parse::<f64>() {
+        if let Ok(rate) = rate_str.as_deref().unwrap_or("").parse::<f64>() {
             return Ok(Some(Decimal::from_f64(rate).unwrap_or(default_rate.unwrap())));
         }
     }
@@ -1796,8 +1798,8 @@ fn is_within_tolerance(po_val: Decimal, inv_val: Decimal, tolerance_pct: f64) ->
     if po_val.is_zero() && inv_val.is_zero() {
         return true;
     }
-    let po_f64 = f64::from(po_val);
-    let inv_f64 = f64::from(inv_val);
+    let po_f64 = po_val.to_f64().unwrap_or(0.0);
+    let inv_f64 = inv_val.to_f64().unwrap_or(0.0);
     let diff = (po_f64 - inv_f64).abs();
     let tolerance = (po_f64.abs() * tolerance_pct / 100.0).max(0.01);
     diff <= tolerance
@@ -2079,3 +2081,48 @@ struct PaymentAllocRow {
 struct InvAmountRow {
     net_amount_paise: i64,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateVendorCmd {
+    pub vendor_code: String,
+    pub vendor_name: String,
+    pub vendor_type: String,
+    pub pan: Option<String>,
+    pub gstin: Option<String>,
+    pub payment_terms: i32,
+}
+
+impl ApCommandHandler {
+    pub async fn update_vendor(
+        &self,
+        tenant_id: TenantId,
+        vendor_id: Uuid,
+        updated_by: Uuid,
+        cmd: UpdateVendorCmd,
+    ) -> Result<(), ApError> {
+        let tid = *tenant_id.as_uuid();
+        let vendor_type = VendorType::from_db_str(&cmd.vendor_type);
+
+        sqlx::query(
+            r#"UPDATE vendors SET 
+                vendor_code = $1, vendor_name = $2, vendor_type = $3,
+                pan = $4, gstin = $5, payment_terms = $6,
+                updated_by = $7, updated_at = now(), entity_version = entity_version + 1
+               WHERE vendor_id = $8 AND tenant_id = $9"#
+        )
+        .bind(&cmd.vendor_code)
+        .bind(&cmd.vendor_name)
+        .bind(vendor_type.to_db_str())
+        .bind(&cmd.pan)
+        .bind(&cmd.gstin)
+        .bind(cmd.payment_terms)
+        .bind(updated_by)
+        .bind(vendor_id)
+        .bind(tid)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+}
+

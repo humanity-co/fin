@@ -287,7 +287,7 @@ impl GlQueryHandler {
 
         // We need to get the account type for proper balance calculation
         let account = self.account_repo.find_by_id(tid, account_id).await?;
-        let account_type = account
+        let _account_type = account
             .as_ref()
             .map(|a| format!("{:?}", a.account_type))
             .unwrap_or_default();
@@ -404,7 +404,7 @@ fn compute_closing_balance(account_type: &str, opening: i64, debits: i64, credit
 fn build_coa_node(all: &[Account], account: &Account) -> CoaTreeNode {
     let children: Vec<CoaTreeNode> = all
         .iter()
-        .filter(|a| a.parent_account_id == Some(account.account_id))
+        .filter(|a| a.parent_account_id == Some(account.account_id.clone()))
         .map(|a| build_coa_node(all, a))
         .collect();
 

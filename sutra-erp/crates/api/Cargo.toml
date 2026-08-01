@@ -8,6 +8,8 @@ sutra-core = { path = "../core" }
 sutra-infrastructure = { path = "../infrastructure" }
 sutra-events = { path = "../events" }
 sutra-finance-gl = { path = "../finance-gl" }
+sutra-finance-ap = { path = "../finance-ap" }
+sutra-finance-ar = { path = "../finance-ar" }
 
 # HTTP
 axum.workspace = true
@@ -33,3 +35,5 @@ tracing.workspace = true
 
 # Error
 thiserror.workspace = true
+sqlx.workspace = true
+deadpool-redis.workspace = true

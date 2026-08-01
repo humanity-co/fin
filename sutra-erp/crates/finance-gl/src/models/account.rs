@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use sutra_core::{AuditInfo, EntityId, Money, TenantId};
 
 /// Account aggregate root (Chart of Accounts entry).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Account {
     pub account_id: EntityId<Account>,
     pub tenant_id: TenantId,

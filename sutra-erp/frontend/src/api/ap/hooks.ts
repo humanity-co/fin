@@ -65,6 +65,17 @@ export function useCreateVendor() {
   });
 }
 
+export function useUpdateVendor() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: unknown }) => api.put(`/vendors/${id}`, data),
+    onSuccess: (_, { id }) => {
+      qc.invalidateQueries({ queryKey: apKeys.vendors() });
+      qc.invalidateQueries({ queryKey: apKeys.vendor(id) });
+    },
+  });
+}
+
 export function usePurchaseOrders(params?: Record<string, string>) {
   return useQuery({
     queryKey: apKeys.purchaseOrders(params),

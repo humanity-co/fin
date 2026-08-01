@@ -14,7 +14,7 @@ pub use commands::{
     ApCommandHandler, CreatePurchaseOrderCmd, CreateVendorCmd,
     CreateVendorPaymentCmd, IssuePurchaseOrderCmd, MatchInvoiceCmd,
     PostInvoiceCmd, ProcessPaymentCmd, RecordGoodsReceiptCmd,
-    RecordVendorInvoiceCmd,
+    RecordVendorInvoiceCmd, UpdateVendorCmd,
 };
 pub use errors::ApError;
 pub use events::ApEventData;

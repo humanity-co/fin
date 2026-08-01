@@ -1,0 +1,92 @@
+-- Core tables for Sutra ERP
+
+CREATE TABLE IF NOT EXISTS vendors (
+    vendor_id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL,
+    entity_id UUID,
+    vendor_code VARCHAR(50) NOT NULL,
+    vendor_name VARCHAR(255) NOT NULL,
+    vendor_type VARCHAR(50) NOT NULL,
+    pan VARCHAR(10),
+    pan_status VARCHAR(50),
+    gstin VARCHAR(15),
+    gstin_status VARCHAR(50),
+    gst_composition_scheme BOOLEAN,
+    registration_type VARCHAR(50),
+    contact_person VARCHAR(100),
+    contact_email VARCHAR(100),
+    contact_phone VARCHAR(20),
+    address_line1 VARCHAR(255),
+    address_line2 VARCHAR(255),
+    city VARCHAR(100),
+    state VARCHAR(100),
+    pincode VARCHAR(20),
+    payment_terms INTEGER,
+    default_tds_section VARCHAR(50),
+    tds_applicable BOOLEAN,
+    tax_applicable BOOLEAN,
+    msme_reg_no VARCHAR(50),
+    msme_type VARCHAR(50),
+    is_active BOOLEAN,
+    is_blacklisted BOOLEAN,
+    created_by UUID,
+    created_at TIMESTAMP WITH TIME ZONE,
+    updated_by UUID,
+    updated_at TIMESTAMP WITH TIME ZONE,
+    entity_version INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS journal_entries (
+    journal_id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL,
+    entity_id UUID,
+    journal_number VARCHAR(50) NOT NULL,
+    journal_date DATE NOT NULL,
+    journal_type VARCHAR(50) NOT NULL,
+    reference_number VARCHAR(100),
+    reference_date DATE,
+    narration TEXT,
+    total_amount_paise BIGINT NOT NULL,
+    status VARCHAR(50) NOT NULL,
+    source_module VARCHAR(50) NOT NULL,
+    posted_by UUID,
+    posted_at TIMESTAMP WITH TIME ZONE,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    created_by UUID,
+    created_at TIMESTAMP WITH TIME ZONE,
+    updated_by UUID,
+    updated_at TIMESTAMP WITH TIME ZONE,
+    entity_version INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS journal_entry_lines (
+    line_id UUID PRIMARY KEY,
+    journal_id UUID NOT NULL,
+    tenant_id UUID NOT NULL,
+    line_number INTEGER NOT NULL,
+    account_id UUID NOT NULL,
+    cost_center_id UUID,
+    is_credit BOOLEAN NOT NULL,
+    amount_paise BIGINT NOT NULL,
+    narration TEXT,
+    base_amount_paise BIGINT,
+    exchange_rate NUMERIC,
+    reference_type VARCHAR(50),
+    reference_id UUID,
+    created_by UUID,
+    created_at TIMESTAMP WITH TIME ZONE,
+    updated_by UUID,
+    updated_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE TABLE IF NOT EXISTS event_outbox (
+    event_id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL,
+    aggregate_type VARCHAR(100) NOT NULL,
+    aggregate_id UUID NOT NULL,
+    event_type VARCHAR(100) NOT NULL,
+    payload JSONB NOT NULL,
+    status VARCHAR(50) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    processed_at TIMESTAMP WITH TIME ZONE
+);

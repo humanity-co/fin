@@ -33,7 +33,7 @@ use sutra_finance_ap::{
     ApCommandHandler, CreatePurchaseOrderCmd, CreateVendorCmd,
     CreateVendorPaymentCmd, IssuePurchaseOrderCmd, MatchInvoiceCmd,
     PostInvoiceCmd, ProcessPaymentCmd, RecordGoodsReceiptCmd,
-    RecordVendorInvoiceCmd,
+    RecordVendorInvoiceCmd, ApError, UpdateVendorCmd,
 };
 
 use crate::state::AppState;
@@ -42,7 +42,7 @@ use crate::state::AppState;
 pub fn ap_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/vendors", post(create_vendor).get(list_vendors))
-        .route("/vendors/{id}", get(get_vendor))
+        .route("/vendors/{id}", get(get_vendor).put(update_vendor))
         .route("/purchase-orders", post(create_purchase_order))
         .route("/purchase-orders/{id}/issue", put(issue_purchase_order))
         .route("/goods-receipts", post(record_goods_receipt))
@@ -99,6 +99,16 @@ struct CreateVendorRequest {
     msme_reg_number: Option<String>,
     #[serde(default)]
     msme_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateVendorRequest {
+    vendor_code: String,
+    vendor_name: String,
+    vendor_type: String,
+    pan: Option<String>,
+    gstin: Option<String>,
+    payment_terms: i32,
 }
 
 fn default_payment_terms() -> i32 { 30 }
@@ -296,11 +306,11 @@ struct TdsFilterQuery {
 // ─── Error / OK Helpers ─────────────────────────────────────────────────
 
 fn err_response(status: StatusCode, msg: String) -> (StatusCode, Json<serde_json::Value>) {
-    (status, Json(serde_json::json!({ "success": false, "error": msg, "data": null::<()> })))
+    (status, Json(serde_json::json!({ "success": false, "error": msg, "data": null })))
 }
 
 fn ok_response(data: impl serde::Serialize) -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "success": true, "data": data, "error": null::<()> }))
+    Json(serde_json::json!({ "success": true, "data": data, "error": null }))
 }
 
 fn parse_date(s: &str) -> Option<chrono::NaiveDate> {
@@ -393,13 +403,55 @@ async fn list_vendors(
         q = q.bind(p);
     }
 
-    let _rows: Vec<sqlx::postgres::PgRow> = q.fetch_all(pool).await
+    let rows = q.fetch_all(pool).await
         .map_err(|e| err_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    use sqlx::Row;
+    let vendors: Vec<serde_json::Value> = rows.into_iter().map(|row| {
+        serde_json::json!({
+            "vendorId": row.try_get::<Uuid, _>("vendor_id").unwrap_or_default(),
+            "vendorCode": row.try_get::<String, _>("vendor_code").unwrap_or_default(),
+            "vendorName": row.try_get::<String, _>("vendor_name").unwrap_or_default(),
+            "vendorType": row.try_get::<String, _>("vendor_type").unwrap_or_default(),
+            "pan": row.try_get::<Option<String>, _>("pan").unwrap_or_default(),
+            "panStatus": row.try_get::<String, _>("pan_status").unwrap_or_default(),
+            "gstin": row.try_get::<Option<String>, _>("gstin").unwrap_or_default(),
+            "gstinStatus": row.try_get::<String, _>("gstin_status").unwrap_or_default(),
+            "isActive": row.try_get::<bool, _>("is_active").unwrap_or(true),
+            "isBlacklisted": row.try_get::<bool, _>("is_blacklisted").unwrap_or(false),
+            "paymentTerms": row.try_get::<i32, _>("payment_terms").unwrap_or(30),
+        })
+    }).collect();
+
     Ok(ok_response(serde_json::json!({
-        "vendors": [],
-        "total": 0,
+        "data": vendors,
+        "total": vendors.len(),
     })))
+}
+
+/// PUT /api/v1/ap/vendors/:id
+async fn update_vendor(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+    Json(body): Json<UpdateVendorRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let handler = ApCommandHandler::new(state.db.clone());
+    let tenant_id = TenantId::from_uuid(Uuid::nil());
+    let updated_by = Uuid::nil();
+
+    let cmd = UpdateVendorCmd {
+        vendor_code: body.vendor_code,
+        vendor_name: body.vendor_name,
+        vendor_type: body.vendor_type,
+        pan: body.pan,
+        gstin: body.gstin,
+        payment_terms: body.payment_terms,
+    };
+
+    handler.update_vendor(tenant_id, id, updated_by, cmd).await
+        .map_err(|e| err_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(ok_response(serde_json::json!({"id": id})))
 }
 
 /// GET /api/v1/ap/vendors/:id

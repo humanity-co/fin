@@ -218,10 +218,10 @@ impl ArCommandHandler {
 
             for slot in slots {
                 let slot_amount_pct = rust_decimal::Decimal::from(slot.percentage) / rust_decimal::Decimal::from(100);
-                let slot_amount_paise = (net_payable.as_paise() as f64 * f64::from(slot_amount_pct)) as i64;
+                let slot_amount_paise = (net_payable.as_paise() as f64 * rust_decimal::prelude::ToPrimitive::to_f64(&slot_amount_pct).unwrap_or(0.0)) as i64;
                 installments.push(FeeInstallment {
                     fee_installment_id: Uuid::now_v7(),
-                    student_fee_account_id: account_id,
+                    student_fee_account_id: account_id.clone(),
                     installment_number: slot.slot_number,
                     due_date: slot.due_date,
                     amount: Money::from_paise(slot_amount_paise),
@@ -233,7 +233,7 @@ impl ArCommandHandler {
             // Single installment — full amount due immediately
             installments.push(FeeInstallment {
                 fee_installment_id: Uuid::now_v7(),
-                student_fee_account_id: account_id,
+                student_fee_account_id: account_id.clone(),
                 installment_number: 1,
                 due_date: Utc::now().date_naive(),
                 amount: net_payable,
@@ -402,7 +402,19 @@ impl ArCommandHandler {
         let audit = AuditInfo::new(cmd.received_by);
 
         // Determine payment mode
-        let payment_mode = PaymentMode::from_db_str(&cmd.payment_mode);
+        let payment_mode = match cmd.payment_mode.as_str() {
+            "CASH" => PaymentMode::Cash,
+            "CHEQUE" => PaymentMode::Cheque,
+            "DD" => PaymentMode::Dd,
+            "NEFT" => PaymentMode::Neft,
+            "RTGS" => PaymentMode::Rtgs,
+            "IMPS" => PaymentMode::Imps,
+            "UPI" => PaymentMode::Upi,
+            "CREDIT_CARD" => PaymentMode::CreditCard,
+            "DEBIT_CARD" => PaymentMode::DebitCard,
+            "POS" => PaymentMode::Pos,
+            _ => PaymentMode::PaymentGateway,
+        };
 
         // ── Create GL Journal: DR Bank → CR FeeIncome ──
         let mut journal_lines = Vec::new();
@@ -453,7 +465,7 @@ impl ArCommandHandler {
         drop(tx); // Release the AR transaction lock before calling GL
 
         let gl = self.gl_handler();
-        let journal = gl.create_journal(tenant_id, created_by, journal_cmd).await
+        let journal = gl.create_journal(tenant_id, cmd.received_by, journal_cmd).await
             .map_err(|e| ArError::Internal(format!("Failed to create payment journal: {e}")))?;
 
         let journal = gl.post_journal(
@@ -486,10 +498,10 @@ impl ArCommandHandler {
         .bind(&receipt_number)
         .bind(cmd.student_id)
         .bind(cmd.student_fee_account_id)
-        .bind(payment_mode.to_db_str())
+        .bind(&cmd.payment_mode)
         .bind(cmd.payment_date)
         .bind(cmd.amount.as_paise())
-        .bind(ReceiptStatus::Completed.to_db_str())
+        .bind("COMPLETED".to_string())
         .bind(&cmd.gateway_transaction_id)
         .bind(cmd.bank_transaction_ref.as_deref().unwrap_or(""))
         .bind(&cmd.bank_transaction_ref)
@@ -549,7 +561,7 @@ impl ArCommandHandler {
         .bind(cmd.student_fee_account_id)
         .bind("PAYMENT")
         .bind(cmd.amount.as_paise())
-        .bind(payment_mode.to_db_str())
+        .bind(&cmd.payment_mode)
         .bind(&receipt_number)
         .bind(&cmd.gateway_transaction_id)
         .bind(linked_journal_id)
@@ -569,7 +581,7 @@ impl ArCommandHandler {
                 "receipt_number": receipt_number,
                 "student_id": cmd.student_id.to_string(),
                 "amount": cmd.amount.as_paise(),
-                "payment_mode": payment_mode.to_db_str(),
+                "payment_mode": &cmd.payment_mode,
                 "linked_journal_id": linked_journal_id.to_string(),
                 "occurred_at": Utc::now(),
             }),
@@ -643,7 +655,7 @@ impl ArCommandHandler {
         let calculated_amount = match &concession_type {
             ConcessionType::Percentage => {
                 let pct = cmd.value / rust_decimal::Decimal::from(100);
-                let paise = (fee_account.gross_fee_paise as f64 * f64::from(pct)) as i64;
+                let paise = (fee_account.gross_fee_paise as f64 * rust_decimal::prelude::ToPrimitive::to_f64(&pct).unwrap_or(0.0)) as i64;
                 Money::from_paise(paise)
             }
             ConcessionType::FixedAmount => {

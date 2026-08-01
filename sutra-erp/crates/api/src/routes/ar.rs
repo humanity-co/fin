@@ -171,7 +171,7 @@ fn err_response(
         Json(serde_json::json!({
             "success": false,
             "error": msg,
-            "data": null::<()>
+            "data": null
         })),
     )
 }
@@ -180,7 +180,7 @@ fn ok_response(data: impl serde::Serialize) -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "success": true,
         "data": data,
-        "error": null::<()>
+        "error": null
     }))
 }
 

@@ -14,6 +14,7 @@ members = [
     "crates/finance-assets",
     "crates/compliance",
     "crates/workflow",
+    "crates/server",
 ]
 
 [workspace.package]
@@ -39,7 +40,7 @@ chrono = { version = "0.4", features = ["serde"] }
 time = { version = "0.3", features = ["serde", "macros"] }
 
 # Database
-sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "migrate"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "migrate", "rust_decimal"] }
 
 # Redis
 deadpool-redis = "0.17"

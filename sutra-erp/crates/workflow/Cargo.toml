@@ -8,6 +8,7 @@ sutra-core = { path = "../core" }
 sutra-events = { path = "../events" }
 
 serde.workspace = true
+serde_json.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 async-trait.workspace = true
