@@ -3,6 +3,7 @@ import { Routes, Route } from "react-router-dom";
 import { AppShell } from "../components/layout/AppShell";
 import { Sidebar } from "../components/layout/Sidebar";
 import { Spinner } from "../components/ui";
+import { useDashboardForRole } from "../hooks/useDashboardRole";
 
 // ── Lazy-loaded route components ────────────
 
@@ -59,6 +60,11 @@ function Shell({ children }: { children: React.ReactNode }) {
   );
 }
 
+function RoleDashboard() {
+  const Dashboard = useDashboardForRole();
+  return <Dashboard />;
+}
+
 // ── Route definitions ───────────────────────
 
 export function AppRoutes() {
@@ -76,7 +82,7 @@ export function AppRoutes() {
         path="/dashboard"
         element={
           <Shell>
-            <LazyPage><CfoDashboard /></LazyPage>
+            <LazyPage><RoleDashboard /></LazyPage>
           </Shell>
         }
       />
@@ -265,3 +271,6 @@ export function AppRoutes() {
     </Routes>
   );
 }
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
