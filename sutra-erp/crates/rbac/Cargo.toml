@@ -1,0 +1,19 @@
+[package]
+name = "sutra-rbac"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sutra-core = { path = "../core" }
+axum.workspace = true
+sqlx.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+deadpool-redis.workspace = true
+redis.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+async-trait.workspace = true
+http = "1"

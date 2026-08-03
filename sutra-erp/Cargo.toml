@@ -5,6 +5,7 @@ members = [
     "crates/infrastructure",
     "crates/events",
     "crates/api",
+    "crates/rbac",
     "crates/finance-gl",
     "crates/finance-ar",
     "crates/finance-ap",
