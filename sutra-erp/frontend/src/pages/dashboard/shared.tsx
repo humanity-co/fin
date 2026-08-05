@@ -1,4 +1,4 @@
-import { ArrowDownRight, ArrowUpRight, Clock3 } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight } from "lucide-react";
 import { Link } from "react-router-dom";
 import { MoneyDisplay } from "../../components/data/MoneyDisplay";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";

@@ -6,7 +6,7 @@ export function useKeyboardShortcut(
   modifiers: { ctrl?: boolean; alt?: boolean; shift?: boolean; meta?: boolean; primary?: boolean } = {}
 ) {
   useEffect(() => {
-    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+    const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform || "") || /Mac/.test(navigator.userAgent || "");
 
     const handler = (event: KeyboardEvent) => {
       // Resolve "primary" modifier: Cmd on Mac, Ctrl on Win
@@ -44,7 +44,7 @@ export function useShortcutDisplay() {
   const [isMac, setIsMac] = useState(false);
   
   useEffect(() => {
-    setIsMac(navigator.platform.toUpperCase().indexOf('MAC') >= 0);
+    setIsMac(/Mac|iPod|iPhone|iPad/.test(navigator.platform || "") || /Mac/.test(navigator.userAgent || ""));
   }, []);
 
   return {
@@ -56,12 +56,14 @@ export function useShortcutDisplay() {
       // shortcutDef might be "Alt+D" or "Primary+N"
       if (isMac) {
         return shortcutDef
-          .replace(/Alt\+/i, '⌥')
-          .replace(/Ctrl\+/i, '⌃')
-          .replace(/Primary\+/i, '⌘')
-          .replace(/Shift\+/i, '⇧');
+          .replace(/Alt\+/i, 'Option + ')
+          .replace(/Ctrl\+/i, 'Control + ')
+          .replace(/Primary\+/i, '⌘ ')
+          .replace(/Shift\+/i, 'Shift + ');
       } else {
-        return shortcutDef.replace(/Primary\+/i, 'Ctrl+');
+        return shortcutDef
+          .replace(/Primary\+/i, 'Ctrl + ')
+          .replace(/Alt\+/i, 'Alt + ');
       }
     }
   };

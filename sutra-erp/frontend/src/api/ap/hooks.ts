@@ -42,7 +42,7 @@ export function useVendors(params?: Record<string, string>) {
     queryKey: apKeys.vendors(params),
     queryFn: () =>
       api.get<PaginatedResponse<Vendor>>(
-        `/vendors${buildQueryParams(params || {})}`
+        `/ap/vendors${buildQueryParams(params || {})}`
       ),
   });
 }
@@ -50,7 +50,7 @@ export function useVendors(params?: Record<string, string>) {
 export function useVendor(id: string) {
   return useQuery({
     queryKey: apKeys.vendor(id),
-    queryFn: () => api.get<Vendor>(`/vendors/${id}`),
+    queryFn: () => api.get<Vendor>(`/ap/vendors/${id}`),
     enabled: !!id,
   });
 }
@@ -58,7 +58,7 @@ export function useVendor(id: string) {
 export function useCreateVendor() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (data: unknown) => api.post("/vendors", data),
+    mutationFn: (data: unknown) => api.post("/ap/vendors", data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: apKeys.vendors() });
     },
@@ -68,7 +68,7 @@ export function useCreateVendor() {
 export function useUpdateVendor() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: unknown }) => api.put(`/vendors/${id}`, data),
+    mutationFn: ({ id, data }: { id: string; data: unknown }) => api.put(`/ap/vendors/${id}`, data),
     onSuccess: (_, { id }) => {
       qc.invalidateQueries({ queryKey: apKeys.vendors() });
       qc.invalidateQueries({ queryKey: apKeys.vendor(id) });
@@ -81,7 +81,7 @@ export function usePurchaseOrders(params?: Record<string, string>) {
     queryKey: apKeys.purchaseOrders(params),
     queryFn: () =>
       api.get<PaginatedResponse<PurchaseOrder>>(
-        `/purchase-orders${buildQueryParams(params || {})}`
+        `/ap/purchase-orders${buildQueryParams(params || {})}`
       ),
   });
 }
@@ -89,7 +89,7 @@ export function usePurchaseOrders(params?: Record<string, string>) {
 export function usePurchaseOrder(id: string) {
   return useQuery({
     queryKey: apKeys.purchaseOrder(id),
-    queryFn: () => api.get<PurchaseOrder>(`/purchase-orders/${id}`),
+    queryFn: () => api.get<PurchaseOrder>(`/ap/purchase-orders/${id}`),
     enabled: !!id,
   });
 }

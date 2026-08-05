@@ -61,7 +61,7 @@ export function useAccounts(params?: Record<string, string>) {
     queryKey: glKeys.accounts(),
     queryFn: () =>
       api.get<PaginatedResponse<Account>>(
-        `/accounts${buildQueryParams(params || {})}`
+        `/gl/accounts${buildQueryParams(params || {})}`
       ),
   });
 }
@@ -69,14 +69,14 @@ export function useAccounts(params?: Record<string, string>) {
 export function useAccountTree() {
   return useQuery({
     queryKey: glKeys.accountTree(),
-    queryFn: () => api.get<Account[]>("/accounts"),
+    queryFn: () => api.get<Account[]>("/gl/accounts"),
   });
 }
 
 export function useAccount(id: string) {
   return useQuery({
     queryKey: glKeys.account(id),
-    queryFn: () => api.get<Account>(`/accounts/${id}`),
+    queryFn: () => api.get<Account>(`/gl/accounts/${id}`),
     enabled: !!id,
   });
 }
@@ -86,7 +86,7 @@ export function useJournals(params?: Record<string, string>) {
     queryKey: glKeys.journals(params),
     queryFn: () =>
       api.get<PaginatedResponse<Journal>>(
-        `/journals${buildQueryParams(params || {})}`
+        `/gl/journals${buildQueryParams(params || {})}`
       ),
   });
 }
@@ -94,7 +94,7 @@ export function useJournals(params?: Record<string, string>) {
 export function useJournal(id: string) {
   return useQuery({
     queryKey: glKeys.journal(id),
-    queryFn: () => api.get<Journal>(`/journals/${id}`),
+    queryFn: () => api.get<Journal>(`/gl/journals/${id}`),
     enabled: !!id,
   });
 }
@@ -103,14 +103,14 @@ export function useTrialBalance(params?: Record<string, string>) {
   return useQuery({
     queryKey: glKeys.trialBalance(params),
     queryFn: () =>
-      api.get(`/reports/trial-balance${buildQueryParams(params || {})}`),
+      api.get(`/gl/reports/trial-balance${buildQueryParams(params || {})}`),
   });
 }
 
 export function useCreateJournal() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (data: unknown) => api.post("/journals", data),
+    mutationFn: (data: unknown) => api.post("/gl/journals", data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: glKeys.journals() });
     },
@@ -120,7 +120,7 @@ export function useCreateJournal() {
 export function usePostJournal() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => api.post(`/journals/${id}/post`),
+    mutationFn: (id: string) => api.post(`/gl/journals/${id}/post`),
     onSuccess: (_, id) => {
       qc.invalidateQueries({ queryKey: glKeys.journal(id) });
       qc.invalidateQueries({ queryKey: glKeys.journals() });
