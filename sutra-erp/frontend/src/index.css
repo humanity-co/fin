@@ -1,46 +1,41 @@
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 
 @theme {
-  --color-primary: hsl(252 100% 64%);      /* Electric Indigo */
+  --color-primary: hsl(216, 100%, 50%);      /* Sharp Electric Blue */
   --color-primary-foreground: hsl(0 0% 100%);
   
-  --color-secondary: hsl(252 40% 92%);
-  --color-secondary-foreground: hsl(252 100% 20%);
+  --color-secondary: hsl(210 40% 96%);
+  --color-secondary-foreground: hsl(222 47% 11%);
   
-  --color-background: hsl(210 33% 98%);    /* Soft cool white */
-  --color-foreground: hsl(222 47% 11%);
+  --color-background: hsl(0, 0%, 98%);       /* Very clean #FAFAFA */
+  --color-foreground: hsl(0, 0%, 9%);        /* Pitch black text */
   
-  --color-card: hsla(0, 0%, 100%, 0.7);     /* Glass card */
-  --color-card-foreground: hsl(222 47% 11%);
+  --color-card: hsl(0, 0%, 100%);            /* Pure white */
+  --color-card-foreground: hsl(0, 0%, 9%);
   
   --color-muted: hsl(210 20% 96%);
   --color-muted-foreground: hsl(215 16% 47%);
   
-  --color-accent: hsla(252, 100%, 64%, 0.1);
-  --color-accent-foreground: hsl(252 100% 64%);
+  --color-accent: hsl(210 40% 96.1%);
+  --color-accent-foreground: hsl(222.2 47.4% 11.2%);
   
   --color-destructive: hsl(348 100% 61%);
   --color-destructive-foreground: hsl(0 0% 100%);
   
-  --color-border: hsla(214, 32%, 91%, 0.6);
-  --color-input: hsla(214, 32%, 91%, 0.8);
-  --color-ring: hsl(252 100% 64%);
+  --color-border: hsl(220, 13%, 91%);        /* Crisp light gray */
+  --color-input: hsl(220, 13%, 91%);
+  --color-ring: hsl(216, 100%, 50%);
   
-  --color-sidebar: hsla(222, 47%, 11%, 0.95);
+  --color-sidebar: hsl(222, 47%, 7%);        /* Near pitch black for sidebar */
   --color-sidebar-foreground: hsl(0 0% 100%);
   
-  --radius: 0.75rem; /* Smoother, modern radius */
+  --radius: 0.5rem; /* Tighter, more modern radius */
 }
 
 body {
   margin: 0;
   background-color: var(--color-background);
-  /* Use a vibrant, very subtle mesh gradient background */
-  background-image: radial-gradient(at 0% 0%, hsla(252, 100%, 94%, 1) 0px, transparent 50%),
-                    radial-gradient(at 100% 0%, hsla(190, 100%, 92%, 1) 0px, transparent 50%),
-                    radial-gradient(at 100% 100%, hsla(252, 100%, 94%, 1) 0px, transparent 50%);
-  background-attachment: fixed;
   color: var(--color-foreground);
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -50,7 +45,7 @@ body {
 
 h1, h2, h3, h4, h5, h6 {
   font-family: 'Outfit', system-ui, -apple-system, sans-serif;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.03em; /* Tighter spacing for headings */
 }
 
 @layer base {
@@ -59,49 +54,48 @@ h1, h2, h3, h4, h5, h6 {
   }
 }
 
-/* Glassmorphism Utilities */
+/* Premium Minimalist Card (Replaces Glass) */
 .glass {
   background: var(--color-card);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid hsla(0, 0%, 100%, 0.5);
-  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.05);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.02);
 }
 
 .glass-sidebar {
   background: var(--color-sidebar);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border-right: 1px solid hsla(0, 0%, 100%, 0.1);
+  border-right: 1px solid hsl(222, 47%, 12%);
 }
 
 .glass-input {
-  background: hsla(0, 0%, 100%, 0.5);
-  backdrop-filter: blur(8px);
+  background: var(--color-card);
   border: 1px solid var(--color-input);
-  transition: all 0.2s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .glass-input:focus {
-  background: hsla(0, 0%, 100%, 0.9);
-  box-shadow: 0 0 0 2px var(--color-ring), 0 4px 12px hsla(252, 100%, 64%, 0.15);
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px var(--color-primary), 0 2px 4px rgba(0, 0, 0, 0.03);
+  outline: none;
 }
 
-/* Micro-animations */
+/* Snappy Micro-animations */
 .hover-lift {
-  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease;
+  transition: transform 0.15s cubic-bezier(0.2, 0, 0, 1), box-shadow 0.15s cubic-bezier(0.2, 0, 0, 1);
 }
 .hover-lift:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
 }
 
 .row-focus {
-  transition: all 0.15s ease-out;
+  transition: background-color 0.1s ease;
+}
+.row-focus:hover {
+  background-color: var(--color-muted);
 }
 .row-focus.active {
-  background: var(--color-accent);
-  transform: scale(1.002);
-  box-shadow: inset 2px 0 0 0 var(--color-primary);
+  background-color: var(--color-secondary);
+  border-left: 2px solid var(--color-primary);
 }
 
 .custom-scrollbar::-webkit-scrollbar {
@@ -111,9 +105,9 @@ h1, h2, h3, h4, h5, h6 {
   background: transparent;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: hsla(0, 0%, 100%, 0.2);
-  border-radius: 10px;
+  background: hsl(215 16% 47% / 0.2);
+  border-radius: 4px;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: hsla(0, 0%, 100%, 0.3);
+  background: hsl(215 16% 47% / 0.4);
 }

@@ -77,13 +77,10 @@ export function Sidebar() {
   useKeyboardShortcut('t', () => navigate('/gl/reports/trial-balance'), { alt: true });
 
   return (
-    <aside className="flex w-64 flex-col glass-sidebar shadow-2xl relative overflow-hidden z-20">
-      {/* Background ambient glow */}
-      <div className="absolute top-0 left-0 right-0 h-64 bg-gradient-to-br from-primary/20 to-transparent blur-3xl opacity-50 pointer-events-none" />
-      
+    <aside className="flex w-64 flex-col glass-sidebar shadow-xl relative overflow-hidden z-20">
       {/* Brand */}
       <div className="flex h-16 items-center gap-3 px-6 relative z-10 border-b border-white/5">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-indigo-600 font-bold text-white shadow-[0_0_15px_rgba(124,58,237,0.5)]">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary font-bold text-white shadow-sm">
           <Sparkles className="h-4 w-4" />
         </div>
         <span className="text-lg font-bold tracking-tight text-white font-['Outfit']">Sutra ERP</span>
@@ -108,12 +105,12 @@ export function Sidebar() {
                       className={cn(
                         "group flex items-center justify-between rounded-lg px-3 py-2 text-sm font-medium transition-all duration-300 relative overflow-hidden",
                         isActive
-                          ? "text-white shadow-md bg-white/10 border border-white/10"
-                          : "text-slate-300/80 hover:bg-white/5 hover:text-white"
+                          ? "text-white bg-white/10"
+                          : "text-slate-400 hover:bg-white/5 hover:text-white"
                       )}
                     >
                       {isActive && (
-                        <div className="absolute left-0 top-0 bottom-0 w-1 bg-primary rounded-r-full" />
+                        <div className="absolute left-0 top-0 bottom-0 w-1 bg-primary" />
                       )}
                       <div className="flex items-center gap-3 relative z-10">
                         <item.icon className={cn(
@@ -142,9 +139,9 @@ export function Sidebar() {
       </nav>
 
       {/* Footer */}
-      <div className="border-t border-white/5 p-4 relative z-10 bg-black/20 backdrop-blur-md">
-        <div className="flex items-center gap-2 text-[11px] font-medium text-slate-300/80">
-          <div className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.8)] animate-pulse" />
+      <div className="border-t border-white/5 p-4 relative z-10 bg-transparent">
+        <div className="flex items-center gap-2 text-[11px] font-medium text-slate-500">
+          <div className="h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.5)]" />
           Core Engine Connected
         </div>
       </div>
