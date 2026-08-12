@@ -55,7 +55,7 @@ use tower_http::trace::TraceLayer;
 
 use sutra_auth::middleware::auth_layer;
 
-use crate::routes::{auth::auth_routes, gl::gl_routes};
+use crate::routes::gl::gl_routes;
 use crate::state::AppState;
 
 /// Build the full application router.

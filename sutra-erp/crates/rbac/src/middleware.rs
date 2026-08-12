@@ -1,5 +1,9 @@
 use crate::engine::PermissionEngine;
-use axum::{extract::FromRequestParts, http::{request::Parts, StatusCode}, response::{IntoResponse, Response, Json}};
+use axum::{
+    extract::{FromRef, FromRequestParts},
+    http::{request::Parts, StatusCode},
+    response::{IntoResponse, Response, Json},
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;

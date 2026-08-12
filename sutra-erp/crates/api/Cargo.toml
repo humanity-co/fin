@@ -37,5 +37,6 @@ tracing.workspace = true
 
 # Error
 thiserror.workspace = true
+rust_decimal.workspace = true
 sqlx.workspace = true
 deadpool-redis.workspace = true
