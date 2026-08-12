@@ -152,7 +152,9 @@ export default function JournalEntry() {
               <CheckCircle2 className="h-4 w-4" /> BALANCED ✓ — Debits equal Credits ({formatIndianCurrency(totals.dr)})
             </>
           ) : (
-            <AlertTriangle className="h-4 w-4" /> Enter amounts on both sides — the voucher must balance before posting
+            <>
+              <AlertTriangle className="h-4 w-4" /> Enter amounts on both sides — the voucher must balance before posting
+            </>
           )
         ) : (
           <>
