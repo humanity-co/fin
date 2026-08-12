@@ -165,6 +165,14 @@ export function AppRoutes() {
         }
       />
       <Route
+        path="/ar/students/:studentId/fees"
+        element={
+          <Shell>
+            <LazyPage><StudentFeeAccount /></LazyPage>
+          </Shell>
+        }
+      />
+      <Route
         path="/ar/scholarships"
         element={
           <Shell>
