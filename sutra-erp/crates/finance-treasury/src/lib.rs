@@ -32,7 +32,7 @@ pub mod queries;
 pub mod repository;
 
 pub use commands::{
-    AddSignatoryCmd, ConfigureGatewayCmd, CreateBankAccountCmd,
+    AddSignatoryCmd, CompleteReconciliationCmd, ConfigureGatewayCmd, CreateBankAccountCmd,
     InitiateInterBankTransferCmd, ManualMatchCmd, RecordPettyCashExpenseCmd,
     ReconcileGatewaySettlementCmd, StartReconciliationCmd, SyncBankBalanceCmd,
     TopUpPettyCashCmd, TreasuryCommandHandler, UpdateBankAccountCmd,

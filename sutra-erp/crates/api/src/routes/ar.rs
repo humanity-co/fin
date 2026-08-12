@@ -381,8 +381,8 @@ async fn grant_concession(
     let handler = ArCommandHandler::new(state.db.clone());
     let tenant_id = TenantId::from_uuid(Uuid::nil());
 
-    let value = rust_decimal::Decimal::from_f64(body.value)
-        .ok_or_else(|| err_response(StatusCode::BAD_REQUEST, "Invalid value".into()))?;
+    let value = rust_decimal::Decimal::try_from(body.value)
+        .map_err(|_| err_response(StatusCode::BAD_REQUEST, "Invalid value".into()))?;
 
     let cmd = GrantConcessionCmd {
         student_id: body.student_id,
