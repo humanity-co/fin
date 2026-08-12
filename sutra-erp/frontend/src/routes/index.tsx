@@ -14,9 +14,11 @@ const ChartOfAccounts = lazy(() => import("../pages/gl/ChartOfAccounts"));
 const JournalList = lazy(() => import("../pages/gl/JournalList"));
 const JournalEntry = lazy(() => import("../pages/gl/JournalEntry"));
 const TrialBalance = lazy(() => import("../pages/gl/TrialBalance"));
+const AccountLedger = lazy(() => import("../pages/gl/AccountLedger"));
 
 const FeeStructures = lazy(() => import("../pages/ar/FeeStructures"));
 const FeeCollection = lazy(() => import("../pages/ar/FeeCollection"));
+const StudentFeeAccount = lazy(() => import("../pages/ar/StudentFeeAccount"));
 const Scholarships = lazy(() => import("../pages/ar/Scholarships"));
 const Refunds = lazy(() => import("../pages/ar/Refunds"));
 
@@ -133,6 +135,14 @@ export function AppRoutes() {
         element={
           <Shell>
             <LazyPage><TrialBalance /></LazyPage>
+          </Shell>
+        }
+      />
+      <Route
+        path="/gl/ledger/:accountId"
+        element={
+          <Shell>
+            <LazyPage><AccountLedger /></LazyPage>
           </Shell>
         }
       />

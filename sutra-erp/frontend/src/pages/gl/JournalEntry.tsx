@@ -1,7 +1,9 @@
 import { useState, useMemo, useEffect } from "react";
-import { Plus, Trash2, Save, FileText } from "lucide-react";
+import { Plus, Trash2, Save, FileText, Send, CheckCircle2, AlertTriangle } from "lucide-react";
 import { api } from "../../lib/api-client";
 import { useNavigate } from "react-router-dom";
+import { COA_ACCOUNTS } from "../../lib/mock-data";
+import { formatIndianCurrency } from "../../lib/formatters";
 
 interface VoucherLine {
   id: string;
@@ -33,12 +35,8 @@ export default function JournalEntry() {
       if (res && res.length > 0) {
         setAccounts(res);
       } else {
-        // Fallback mock accounts for UI completeness
-        setAccounts([
-          { account_id: "00000000-0000-0000-0000-000000000001", account_code: "1110", account_name: "Bank A/c" },
-          { account_id: "00000000-0000-0000-0000-000000000002", account_code: "4000", account_name: "Sales A/c" },
-          { account_id: "00000000-0000-0000-0000-000000000003", account_code: "5000", account_name: "Purchase A/c" },
-        ]);
+        // Fallback to the full mock chart of accounts for UI completeness
+        setAccounts(COA_ACCOUNTS.map((a) => ({ account_id: a.account_id, account_code: a.account_code, account_name: a.account_name })));
       }
     });
   }, []);
@@ -72,7 +70,11 @@ export default function JournalEntry() {
     return { dr, cr, diff: Math.abs(dr - cr) };
   }, [lines]);
 
-  const handleSave = async () => {
+  const handleSave = async (mode: "Draft" | "Post" = "Post") => {
+    if (mode === "Post" && (totals.diff !== 0 || totals.dr === 0)) {
+      alert("Voucher is unbalanced — debit and credit totals must match before posting.");
+      return;
+    }
     try {
       const payload = {
         journal_type: voucherType.toUpperCase(),
@@ -80,6 +82,7 @@ export default function JournalEntry() {
         entity_id: "00000000-0000-0000-0000-000000000000",
         posting_date: date,
         description: narration || "Journal Entry",
+        status: mode === "Draft" ? "Draft" : "Posted",
         lines: lines.map((l, i) => ({
           line_number: i + 1,
           account_id: l.account || "00000000-0000-0000-0000-000000000001",
@@ -103,28 +106,60 @@ export default function JournalEntry() {
         <div>
           <h1 className="text-xl font-bold text-slate-800 flex items-center gap-2">
             <FileText className="h-5 w-5 text-primary" />
-            Accounting Voucher Creation
+            Journal Entry
           </h1>
-          <p className="text-xs font-medium text-slate-500 mt-1">Gateway / Vouchers / Create</p>
+          <p className="text-xs font-medium text-slate-500 mt-1">General Ledger / Journals / New Entry</p>
         </div>
         <div className="flex gap-3">
           <button onClick={() => navigate('/gl/journals')} className="glass-input hover-lift text-slate-700 text-xs font-semibold px-5 py-2 rounded-lg transition-colors flex items-center gap-2">
             Cancel
           </button>
-          <button 
-            onClick={handleSave}
+          <button
+            onClick={() => handleSave("Draft")}
+            className="text-xs font-semibold px-5 py-2 rounded-lg shadow-md transition-all flex items-center gap-2 glass-input text-slate-600 hover-lift"
+          >
+            <Save className="h-4 w-4" />
+            Save Draft
+          </button>
+          <button
+            onClick={() => handleSave("Post")}
             disabled={totals.diff !== 0 || totals.dr === 0}
             className={`text-xs font-semibold px-5 py-2 rounded-lg shadow-md transition-all flex items-center gap-2 ${
               totals.diff === 0 && totals.dr > 0
-                ? "bg-primary hover:bg-primary/90 text-white hover-lift ring-2 ring-primary/20" 
+                ? "bg-emerald-600 hover:bg-emerald-500 text-white hover-lift ring-2 ring-emerald-500/30 shadow-[0_0_15px_rgba(16,185,129,0.35)]"
                 : "bg-slate-200 text-slate-400 cursor-not-allowed"
             }`}
           >
-            <Save className="h-4 w-4" />
-            Save Voucher
+            <Send className="h-4 w-4" />
+            Post Voucher
           </button>
         </div>
       </header>
+
+      {/* Balance status strip */}
+      <div
+        className={`mb-6 flex items-center gap-2 rounded-xl border px-4 py-2.5 text-xs font-bold ${
+          totals.diff === 0
+            ? totals.dr > 0
+              ? "border-emerald-200 bg-emerald-50/80 text-emerald-700"
+              : "border-slate-200 bg-slate-50 text-slate-500"
+            : "border-rose-200 bg-rose-50/80 text-rose-700 animate-pulse"
+        }`}
+      >
+        {totals.diff === 0 ? (
+          totals.dr > 0 ? (
+            <>
+              <CheckCircle2 className="h-4 w-4" /> BALANCED ✓ — Debits equal Credits ({formatIndianCurrency(totals.dr)})
+            </>
+          ) : (
+            <AlertTriangle className="h-4 w-4" /> Enter amounts on both sides — the voucher must balance before posting
+          )
+        ) : (
+          <>
+            <AlertTriangle className="h-4 w-4" /> IMBALANCE: {formatIndianCurrency(totals.diff)} — posting is disabled until debit = credit
+          </>
+        )}
+      </div>
 
       {/* Header Info */}
       <div className="glass border border-white/60 shadow-sm rounded-xl p-5 mb-6 grid grid-cols-1 md:grid-cols-4 gap-6">
