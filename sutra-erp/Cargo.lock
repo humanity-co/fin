@@ -2535,6 +2535,7 @@ dependencies = [
  "sutra-finance-ap",
  "sutra-finance-ar",
  "sutra-finance-gl",
+ "sutra-finance-treasury",
  "sutra-infrastructure",
  "sutra-rbac",
  "thiserror",
@@ -2706,9 +2707,14 @@ dependencies = [
  "chrono",
  "rust_decimal",
  "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
  "sutra-core",
  "sutra-events",
+ "sutra-finance-gl",
  "thiserror",
+ "tracing",
  "uuid",
 ]
 

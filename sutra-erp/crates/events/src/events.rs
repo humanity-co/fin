@@ -147,6 +147,151 @@ pub enum TreasuryEvent {
         reference: String,
         occurred_at: DateTime<Utc>,
     },
+    // ── Treasury & Banking (spec §Treasury) ──────────────────────────
+    BankAccountCreated {
+        bank_account_id: String,
+        account_name: String,
+        bank_name: String,
+        account_type: String,
+        entity_id: String,
+        gl_account_id: String,
+        occurred_at: DateTime<Utc>,
+    },
+    BankAccountUpdated {
+        bank_account_id: String,
+        occurred_at: DateTime<Utc>,
+    },
+    BankAccountDeactivated {
+        bank_account_id: String,
+        occurred_at: DateTime<Utc>,
+    },
+    SignatoryAdded {
+        bank_account_id: String,
+        user_id: String,
+        occurred_at: DateTime<Utc>,
+    },
+    SignatoryRemoved {
+        bank_account_id: String,
+        user_id: String,
+        occurred_at: DateTime<Utc>,
+    },
+    BankBalanceSynced {
+        bank_account_id: String,
+        balance: i64,
+        synced_at: DateTime<Utc>,
+        occurred_at: DateTime<Utc>,
+    },
+    MinimumBalanceAlert {
+        bank_account_id: String,
+        current_balance: i64,
+        minimum_balance: i64,
+        occurred_at: DateTime<Utc>,
+    },
+    ReconciliationStarted {
+        reconciliation_id: String,
+        bank_account_id: String,
+        period_id: String,
+        occurred_at: DateTime<Utc>,
+    },
+    BankStatementUploaded {
+        reconciliation_id: String,
+        line_count: i64,
+        occurred_at: DateTime<Utc>,
+    },
+    AutoReconciliationCompleted {
+        reconciliation_id: String,
+        matched_count: i64,
+        unmatched_count: i64,
+        occurred_at: DateTime<Utc>,
+    },
+    LineMatched {
+        reconciliation_id: String,
+        statement_line_id: String,
+        transaction_id: String,
+        transaction_type: String,
+        occurred_at: DateTime<Utc>,
+    },
+    LineUnmatched {
+        reconciliation_id: String,
+        statement_line_id: String,
+        occurred_at: DateTime<Utc>,
+    },
+    ReconciliationVerified {
+        reconciliation_id: String,
+        verified_by: String,
+        occurred_at: DateTime<Utc>,
+    },
+    BrsGenerated {
+        reconciliation_id: String,
+        document_url: String,
+        occurred_at: DateTime<Utc>,
+    },
+    InterBankTransferInitiated {
+        transfer_id: String,
+        from_account: String,
+        to_account: String,
+        amount: i64,
+        occurred_at: DateTime<Utc>,
+    },
+    InterBankTransferApproved {
+        transfer_id: String,
+        approved_by: String,
+        occurred_at: DateTime<Utc>,
+    },
+    InterBankTransferProcessed {
+        transfer_id: String,
+        journal_id: String,
+        occurred_at: DateTime<Utc>,
+    },
+    InterBankTransferCompleted {
+        transfer_id: String,
+        from_account: String,
+        to_account: String,
+        amount: i64,
+        bank_reference: String,
+        occurred_at: DateTime<Utc>,
+    },
+    InterBankTransferCancelled {
+        transfer_id: String,
+        reason: String,
+        occurred_at: DateTime<Utc>,
+    },
+    InterBankTransferFailed {
+        transfer_id: String,
+        reason: String,
+        occurred_at: DateTime<Utc>,
+    },
+    PettyCashFundCreated {
+        fund_id: String,
+        entity_id: String,
+        imprest_amount: i64,
+        occurred_at: DateTime<Utc>,
+    },
+    PettyCashTopUp {
+        fund_id: String,
+        amount: i64,
+        occurred_at: DateTime<Utc>,
+    },
+    PettyCashExpenseRecorded {
+        fund_id: String,
+        voucher_no: String,
+        amount: i64,
+        account_id: String,
+        occurred_at: DateTime<Utc>,
+    },
+    GatewayConfigured {
+        entity_id: String,
+        gateway_type: String,
+        occurred_at: DateTime<Utc>,
+    },
+    GatewaySettlementReconciled {
+        entity_id: String,
+        gateway_type: String,
+        settlement_date: String,
+        settled_amount: i64,
+        fee_amount: i64,
+        occurred_at: DateTime<Utc>,
+    },
 }
 
 // ─── Taxation Events ─────────────────────────────────────────────

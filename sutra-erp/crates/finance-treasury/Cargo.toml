@@ -2,14 +2,17 @@
 name = "sutra-finance-treasury"
 version.workspace = true
 edition.workspace = true
-
 [dependencies]
 sutra-core = { path = "../core" }
 sutra-events = { path = "../events" }
-
+sutra-finance-gl = { path = "../finance-gl" }
 serde.workspace = true
+serde_json.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 async-trait.workspace = true
 thiserror.workspace = true
 rust_decimal.workspace = true
+sqlx.workspace = true
+tracing.workspace = true
+sha2.workspace = true

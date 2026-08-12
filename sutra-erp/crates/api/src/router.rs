@@ -72,6 +72,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .nest("/auth", Router::new().route("/me", get(crate::routes::auth::me)))
         .nest("/gl", gl_routes())
         .nest("/ap", crate::routes::ap::ap_routes())
+        .nest("/treasury", crate::routes::treasury::treasury_routes())
         .route_layer(middleware::from_fn(auth_layer));
 
     let api_routes = Router::new()
