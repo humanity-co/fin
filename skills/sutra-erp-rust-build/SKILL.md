@@ -23,10 +23,15 @@ rm -rf /tmp/sutra-target
 cargo check
 ```
 
-If rustup's default toolchain is broken, use the direct toolchain paths:
+If rustup's default toolchain is broken, use the direct toolchain paths AND
+export the toolchain bin dir on PATH so cargo can find rustc:
 ```bash
-/tmp/rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo check
+export PATH=/tmp/rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin:$PATH
+cd /home/team/shared/sutra-erp
+cargo check
 ```
+(Using the direct cargo binary without PATH yields
+`could not execute process 'rustc -vV' ... No such file or directory`.)
 
 ## Known Issues
 - `rustup default stable` fails due to /home disk space during component installation.
