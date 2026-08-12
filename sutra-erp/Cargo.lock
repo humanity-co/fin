@@ -2697,7 +2697,9 @@ dependencies = [
  "sqlx",
  "sutra-core",
  "sutra-events",
+ "sutra-finance-gl",
  "thiserror",
+ "tracing",
  "uuid",
 ]
 
