@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import { FileText, FilterX, Plus, Search } from "lucide-react";
 import { PageHeader } from "../../components/layout/PageHeader";
 import { Card, CardContent, Button, Input, TableSkeleton } from "../../components/ui";

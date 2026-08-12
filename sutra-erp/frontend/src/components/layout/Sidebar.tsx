@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import { NavLink, useLocation, useNavigate } from "react-router";
 import {
   LayoutDashboard, BookOpen, FileText, PieChart, Users, GraduationCap, Award,
   Undo2, Building2, ListOrdered, FileSearch, Banknote, Landmark, Scale, Percent,

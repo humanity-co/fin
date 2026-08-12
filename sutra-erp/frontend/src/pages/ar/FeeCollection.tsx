@@ -1,10 +1,10 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import { ArrowRight, CheckCircle2, Receipt, Search, UserRound } from "lucide-react";
 import { PageHeader } from "../../components/layout/PageHeader";
 import { Card, CardContent, Button, Input } from "../../components/ui";
 import { MoneyDisplay, StatusBadge } from "../../components/data";
-import { MOCK_STUDENTS, MOCK_STUDENT_FEE_ACCOUNTS, findStudent, type Student } from "../../lib/mock-data";
+import { MOCK_STUDENTS, MOCK_STUDENT_FEE_ACCOUNTS, type Student } from "../../lib/mock-data";
 import { formatIndianDate } from "../../lib/formatters";
 
 const PAYMENT_MODES = ["UPI", "NEFT", "RTGS", "Cash", "Cheque", "Demand Draft"];

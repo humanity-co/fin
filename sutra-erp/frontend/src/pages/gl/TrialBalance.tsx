@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import { CheckCircle2, Download, FileText } from "lucide-react";
 import { PageHeader } from "../../components/layout/PageHeader";
 import { Card, CardContent, Button, TableSkeleton } from "../../components/ui";

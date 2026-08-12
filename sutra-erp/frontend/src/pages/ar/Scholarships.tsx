@@ -158,7 +158,6 @@ export default function Scholarships() {
                 {/* Lifecycle stepper */}
                 <div className="flex items-center justify-between">
                   {STEPS.map((step, i) => {
-                    const stepIndex = STEPS.indexOf(selected.status === "PartiallyDisbursed" ? "Disbursed" : selected.status === "Disbursed" ? "Disbursed" : selected.status as (typeof STEPS)[number] ?? "Applied");
                     const reached = i < STEPS.indexOf(selected.status === "Disbursed" || selected.status === "PartiallyDisbursed" ? "Disbursed" : selected.status === "Sanctioned" ? "Sanctioned" : selected.status === "Verified" ? "Verified" : selected.status === "Applied" ? "Applied" : "Reconciled");
                     const active = selected.status === "PartiallyDisbursed" && step === "Disbursed";
                     return (

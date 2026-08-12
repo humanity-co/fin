@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { Plus, Trash2, Save, FileText, Send, CheckCircle2, AlertTriangle } from "lucide-react";
 import { api } from "../../lib/api-client";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import { COA_ACCOUNTS } from "../../lib/mock-data";
 import { formatIndianCurrency } from "../../lib/formatters";
 

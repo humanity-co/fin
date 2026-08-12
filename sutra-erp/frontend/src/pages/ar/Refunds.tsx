@@ -227,7 +227,7 @@ function ProcessRefundForm({ refund, isProcessing, onDone }: { refund: RefundReq
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div>
             <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Refund Mode</label>
-            <select value={mode} onChange={(e) => setMode(e.target.value)} disabled={!isProcessing} className="h-10 w-full rounded-lg border border-white/60 bg-white/60 px-3 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:opacity-50">
+            <select value={mode} onChange={(e) => setMode(e.target.value as typeof mode)} disabled={!isProcessing} className="h-10 w-full rounded-lg border border-white/60 bg-white/60 px-3 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:opacity-50">
               <option>NEFT</option><option>RTGS</option><option>UPI</option><option>Cheque</option>
             </select>
           </div>

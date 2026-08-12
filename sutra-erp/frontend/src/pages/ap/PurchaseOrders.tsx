@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ArrowRight, CheckCircle2, FileText, ListOrdered, Plus, Search, ShieldAlert } from "lucide-react";
+import { CheckCircle2, FileText, ListOrdered, Plus, Search, ShieldAlert } from "lucide-react";
 import { PageHeader } from "../../components/layout/PageHeader";
 import { Card, CardContent, Button, Input, TableSkeleton, Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "../../components/ui";
 import { MoneyDisplay, StatusBadge } from "../../components/data";

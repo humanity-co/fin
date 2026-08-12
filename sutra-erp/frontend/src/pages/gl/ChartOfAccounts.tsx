@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import { Plus, Search, Folder, File, ChevronRight, ChevronDown, BookOpen } from "lucide-react";
 import { PageHeader } from "../../components/layout/PageHeader";
 import { Card, CardContent, Button, Input, TableSkeleton } from "../../components/ui";

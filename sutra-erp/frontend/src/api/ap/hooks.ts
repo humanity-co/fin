@@ -95,7 +95,7 @@ export function useUpdateVendor() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, data }: { id: string; data: unknown }) => api.put(`/vendors/${id}`, data),
-    onSuccess: (_, { id }) => {
+    onSuccess: (_: unknown, { id }: { id: string; data: unknown }) => {
       qc.invalidateQueries({ queryKey: apKeys.vendors() });
       qc.invalidateQueries({ queryKey: apKeys.vendor(id) });
     },
