@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route } from "react-router";
 import { AppShell } from "../components/layout/AppShell";
 import { Sidebar } from "../components/layout/Sidebar";
 import { Spinner } from "../components/ui";
@@ -14,9 +14,11 @@ const ChartOfAccounts = lazy(() => import("../pages/gl/ChartOfAccounts"));
 const JournalList = lazy(() => import("../pages/gl/JournalList"));
 const JournalEntry = lazy(() => import("../pages/gl/JournalEntry"));
 const TrialBalance = lazy(() => import("../pages/gl/TrialBalance"));
+const AccountLedger = lazy(() => import("../pages/gl/AccountLedger"));
 
 const FeeStructures = lazy(() => import("../pages/ar/FeeStructures"));
 const FeeCollection = lazy(() => import("../pages/ar/FeeCollection"));
+const StudentFeeAccount = lazy(() => import("../pages/ar/StudentFeeAccount"));
 const Scholarships = lazy(() => import("../pages/ar/Scholarships"));
 const Refunds = lazy(() => import("../pages/ar/Refunds"));
 
@@ -32,6 +34,7 @@ const GstReports = lazy(() => import("../pages/tax/GstReports"));
 const TdsDeductions = lazy(() => import("../pages/tax/TdsDeductions"));
 
 const NaacDashboard = lazy(() => import("../pages/reports/NaacDashboard"));
+const AisheExtract = lazy(() => import("../pages/reports/AisheExtract"));
 
 const SystemSettings = lazy(() => import("../pages/settings/SystemSettings"));
 const UserManagement = lazy(() => import("../pages/settings/UserManagement"));
@@ -136,6 +139,14 @@ export function AppRoutes() {
           </Shell>
         }
       />
+      <Route
+        path="/gl/ledger/:accountId"
+        element={
+          <Shell>
+            <LazyPage><AccountLedger /></LazyPage>
+          </Shell>
+        }
+      />
 
       {/* Accounts Receivable */}
       <Route
@@ -151,6 +162,14 @@ export function AppRoutes() {
         element={
           <Shell>
             <LazyPage><FeeCollection /></LazyPage>
+          </Shell>
+        }
+      />
+      <Route
+        path="/ar/students/:studentId/fees"
+        element={
+          <Shell>
+            <LazyPage><StudentFeeAccount /></LazyPage>
           </Shell>
         }
       />
@@ -247,6 +266,14 @@ export function AppRoutes() {
         element={
           <Shell>
             <LazyPage><NaacDashboard /></LazyPage>
+          </Shell>
+        }
+      />
+      <Route
+        path="/reports/aishe"
+        element={
+          <Shell>
+            <LazyPage><AisheExtract /></LazyPage>
           </Shell>
         }
       />

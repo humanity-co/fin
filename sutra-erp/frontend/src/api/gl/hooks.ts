@@ -121,7 +121,7 @@ export function usePostJournal() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.post(`/journals/${id}/post`),
-    onSuccess: (_, id) => {
+    onSuccess: (_: unknown, id: string) => {
       qc.invalidateQueries({ queryKey: glKeys.journal(id) });
       qc.invalidateQueries({ queryKey: glKeys.journals() });
     },

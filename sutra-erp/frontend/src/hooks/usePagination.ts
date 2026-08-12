@@ -1,5 +1,5 @@
 import { useMemo, useCallback } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router";
 import { DEFAULT_PAGE_SIZE } from "../lib/constants";
 
 interface PaginationState {
