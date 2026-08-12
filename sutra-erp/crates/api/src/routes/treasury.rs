@@ -11,7 +11,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
     Router,
 };
 use serde::Deserialize;
@@ -38,7 +38,7 @@ pub fn treasury_routes() -> Router<Arc<AppState>> {
         .route("/bank-accounts/{id}", get(get_bank_account).put(update_bank_account))
         .route("/bank-accounts/{id}/deactivate", post(deactivate_bank_account))
         .route("/bank-accounts/{id}/signatories", post(add_signatory).get(list_signatories))
-        .route("/bank-accounts/{id}/signatories/{userId}", delete_signatory)
+        .route("/bank-accounts/{id}/signatories/{userId}", delete(delete_signatory))
         .route("/bank-accounts/{id}/sync-balance", post(sync_bank_balance))
         // Reconciliations
         .route("/reconciliations", post(start_reconciliation).get(list_reconciliations))
