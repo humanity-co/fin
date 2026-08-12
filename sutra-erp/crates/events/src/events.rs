@@ -296,7 +296,7 @@ pub enum TreasuryEvent {
 
 // ─── Taxation Events ─────────────────────────────────────────────
 
-/// Taxation domain events (GST, TDS).
+/// Taxation domain events (GST, ITC, RCM, TDS, income-tax compliance).
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
 pub enum TaxationEvent {
@@ -321,6 +321,154 @@ pub enum TaxationEvent {
         quarter: String,
         fiscal_year: String,
         total_deductions: i64,
+        occurred_at: DateTime<Utc>,
+    },
+    // ── GST (spec §Tax Engine events) ────────────────────────────────
+    GstinRegistered {
+        reg_id: String,
+        entity_id: String,
+        gstin: String,
+        occurred_at: DateTime<Utc>,
+    },
+    GstRateUpdated {
+        hsn_sac_code: String,
+        rate: i64,
+        effective_from: String,
+        occurred_at: DateTime<Utc>,
+    },
+    Gstr1Generated {
+        return_id: String,
+        period: String,
+        tax_liability: i64,
+        occurred_at: DateTime<Utc>,
+    },
+    Gstr3bGenerated {
+        return_id: String,
+        period: String,
+        tax_liability: i64,
+        itc_claimed: i64,
+        occurred_at: DateTime<Utc>,
+    },
+    GstReturnFiled {
+        return_id: String,
+        period: String,
+        acknowledgment_no: String,
+        occurred_at: DateTime<Utc>,
+    },
+    RcmEntryCreated {
+        invoice_id: String,
+        rcm_payable_amount: i64,
+        journal_id: String,
+        occurred_at: DateTime<Utc>,
+    },
+    // ── ITC register ────────────────────────────────────────────────
+    ItcComputed {
+        reg_id: String,
+        period: String,
+        total_itc: i64,
+        net_itc_eligible: i64,
+        occurred_at: DateTime<Utc>,
+    },
+    Rule42ReversalComputed {
+        reg_id: String,
+        period: String,
+        reversal_amount: i64,
+        exempt_turnover: i64,
+        total_turnover: i64,
+        occurred_at: DateTime<Utc>,
+    },
+    Rule43ReversalComputed {
+        reg_id: String,
+        period: String,
+        reversal_amount: i64,
+        capital_goods_itc: i64,
+        occurred_at: DateTime<Utc>,
+    },
+    ItcReversalPosted {
+        register_line_id: String,
+        reversal_amount: i64,
+        journal_id: String,
+        occurred_at: DateTime<Utc>,
+    },
+    // ── TDS ─────────────────────────────────────────────────────────
+    TdsSectionUpdated {
+        section_code: String,
+        rate: String,
+        threshold: Option<i64>,
+        occurred_at: DateTime<Utc>,
+    },
+    TdsDeposited {
+        tds_deduction_id: String,
+        challan_reference: String,
+        deposit_date: String,
+        amount: i64,
+        occurred_at: DateTime<Utc>,
+    },
+    TdsReturnFiled {
+        return_id: String,
+        acknowledgment_no: String,
+        occurred_at: DateTime<Utc>,
+    },
+    Form16Generated {
+        employee_id: String,
+        fiscal_year: String,
+        document_url: String,
+        occurred_at: DateTime<Utc>,
+    },
+    Form16AGenerated {
+        vendor_id: String,
+        fiscal_year: String,
+        document_url: String,
+        occurred_at: DateTime<Utc>,
+    },
+    // ── Income-tax compliance (trust/society) ───────────────────────
+    TrustExemptionRegistered {
+        reg_id: String,
+        section: String,
+        registration_no: String,
+        valid_to: String,
+        occurred_at: DateTime<Utc>,
+    },
+    ExemptionRenewed {
+        reg_id: String,
+        section: String,
+        valid_to: String,
+        occurred_at: DateTime<Utc>,
+    },
+    ExemptionExpiring {
+        reg_id: String,
+        section: String,
+        days_remaining: i64,
+        occurred_at: DateTime<Utc>,
+    },
+    IncomeApplicationComputed {
+        fiscal_year_id: String,
+        total_income: i64,
+        applied_percent: String,
+        is_compliant: bool,
+        occurred_at: DateTime<Utc>,
+    },
+    IncomeApplicationThresholdMissed {
+        fiscal_year_id: String,
+        applied_percent: String,
+        threshold: i64,
+        occurred_at: DateTime<Utc>,
+    },
+    Section115BreachDetected {
+        fiscal_year_id: String,
+        details: String,
+        occurred_at: DateTime<Utc>,
+    },
+    FcraRegistered {
+        reg_id: String,
+        registration_no: String,
+        valid_to: String,
+        occurred_at: DateTime<Utc>,
+    },
+    FcraAdminExpenseExceeded {
+        fiscal_year_id: String,
+        expense_ratio: String,
+        max_allowed: i64,
         occurred_at: DateTime<Utc>,
     },
 }
