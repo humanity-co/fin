@@ -34,6 +34,7 @@ const GstReports = lazy(() => import("../pages/tax/GstReports"));
 const TdsDeductions = lazy(() => import("../pages/tax/TdsDeductions"));
 
 const NaacDashboard = lazy(() => import("../pages/reports/NaacDashboard"));
+const AisheExtract = lazy(() => import("../pages/reports/AisheExtract"));
 
 const SystemSettings = lazy(() => import("../pages/settings/SystemSettings"));
 const UserManagement = lazy(() => import("../pages/settings/UserManagement"));
@@ -265,6 +266,14 @@ export function AppRoutes() {
         element={
           <Shell>
             <LazyPage><NaacDashboard /></LazyPage>
+          </Shell>
+        }
+      />
+      <Route
+        path="/reports/aishe"
+        element={
+          <Shell>
+            <LazyPage><AisheExtract /></LazyPage>
           </Shell>
         }
       />
