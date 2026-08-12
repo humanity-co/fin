@@ -34,6 +34,7 @@ use sutra_finance_ar::{
     InitiateRefundCmd, ProcessRefundCmd, RecordFeePaymentCmd,
     RecordScholarshipDisbursementCmd, VerifyScholarshipCmd,
 };
+use sutra_rbac::middleware::UserContext;
 
 use crate::state::AppState;
 
@@ -188,10 +189,15 @@ fn ok_response(data: impl serde::Serialize) -> Json<serde_json::Value> {
 
 /// POST /api/v1/ar/students/:id/assess-fees
 async fn assess_student_fees(
+    user: UserContext,
     State(state): State<Arc<AppState>>,
     Path(student_id): Path<Uuid>,
     Json(body): Json<AssessFeesRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .permission_engine
+        .require(&user, "ar:fee_structure:view")
+        .await?;
     let handler = ArCommandHandler::new(state.db.clone());
     let tenant_id = TenantId::from_uuid(Uuid::nil());
     let created_by = Uuid::nil();
@@ -214,9 +220,14 @@ async fn assess_student_fees(
 
 /// POST /api/v1/ar/payments
 async fn record_fee_payment(
+    user: UserContext,
     State(state): State<Arc<AppState>>,
     Json(body): Json<RecordPaymentRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .permission_engine
+        .require(&user, "ar:fee_collection:collect")
+        .await?;
     let handler = ArCommandHandler::new(state.db.clone());
     let tenant_id = TenantId::from_uuid(Uuid::nil());
     let received_by = Uuid::nil();
@@ -291,8 +302,13 @@ async fn get_student_fees(
 
 /// GET /api/v1/ar/payments/receipts
 async fn list_receipts(
+    user: UserContext,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .permission_engine
+        .require(&user, "ar:fee_collection:view")
+        .await?;
     let tid = Uuid::nil();
     let pool = &state.db;
 
@@ -386,9 +402,14 @@ async fn grant_concession(
 
 /// POST /api/v1/ar/scholarships
 async fn apply_scholarship(
+    user: UserContext,
     State(state): State<Arc<AppState>>,
     Json(body): Json<ApplyScholarshipRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .permission_engine
+        .require(&user, "ar:scholarship:create")
+        .await?;
     let handler = ArCommandHandler::new(state.db.clone());
     let tenant_id = TenantId::from_uuid(Uuid::nil());
     let created_by = Uuid::nil();
@@ -410,10 +431,15 @@ async fn apply_scholarship(
 
 /// PUT /api/v1/ar/scholarships/:id/verify
 async fn verify_scholarship(
+    user: UserContext,
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
     Json(body): Json<VerifyScholarshipRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .permission_engine
+        .require(&user, "ar:scholarship:approve")
+        .await?;
     let handler = ArCommandHandler::new(state.db.clone());
     let tenant_id = TenantId::from_uuid(Uuid::nil());
 
@@ -430,10 +456,15 @@ async fn verify_scholarship(
 
 /// PUT /api/v1/ar/scholarships/:id/disburse
 async fn disburse_scholarship(
+    user: UserContext,
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
     Json(body): Json<DisburseScholarshipRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .permission_engine
+        .require(&user, "ar:scholarship:approve")
+        .await?;
     let handler = ArCommandHandler::new(state.db.clone());
     let tenant_id = TenantId::from_uuid(Uuid::nil());
     let created_by = Uuid::nil();
@@ -492,9 +523,14 @@ async fn list_pending_verification(
 
 /// POST /api/v1/ar/refunds
 async fn initiate_refund(
+    user: UserContext,
     State(state): State<Arc<AppState>>,
     Json(body): Json<InitiateRefundRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .permission_engine
+        .require(&user, "ar:refund:create")
+        .await?;
     let handler = ArCommandHandler::new(state.db.clone());
     let tenant_id = TenantId::from_uuid(Uuid::nil());
     let created_by = Uuid::nil();
@@ -524,10 +560,15 @@ async fn initiate_refund(
 
 /// PUT /api/v1/ar/refunds/:id/process
 async fn process_refund(
+    user: UserContext,
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
     Json(body): Json<ProcessRefundRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .permission_engine
+        .require(&user, "ar:refund:approve")
+        .await?;
     let handler = ArCommandHandler::new(state.db.clone());
     let tenant_id = TenantId::from_uuid(Uuid::nil());
 
@@ -546,3 +587,12 @@ async fn process_refund(
         Err(e) => Err(err_response(StatusCode::UNPROCESSABLE_ENTITY, e.to_string())),
     }
 }
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory

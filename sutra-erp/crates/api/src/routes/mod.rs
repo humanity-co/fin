@@ -1,4 +1,6 @@
 //! API route modules.
 
-pub mod gl;
 pub mod ap;
+pub mod ar;
+pub mod auth;
+pub mod gl;

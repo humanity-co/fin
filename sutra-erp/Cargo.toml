@@ -4,6 +4,7 @@ members = [
     "crates/core",
     "crates/infrastructure",
     "crates/events",
+    "crates/auth",
     "crates/api",
     "crates/rbac",
     "crates/finance-gl",
@@ -69,6 +70,11 @@ anyhow = "1"
 
 # Async traits
 async-trait = "0.1"
+
+# Authentication & security
+argon2 = { version = "0.5", features = ["std"] }
+jsonwebtoken = "9"
+sha2 = "0.10"
 
 # Decimal (for tax rates, percentages)
 rust_decimal = { version = "1", features = ["serde"] }

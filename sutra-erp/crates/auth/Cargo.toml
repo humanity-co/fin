@@ -1,20 +1,24 @@
 [package]
-name = "sutra-rbac"
+name = "sutra-auth"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
-sutra-core = { path = "../core" }
-sutra-auth = { path = "../auth" }
+# HTTP & middleware
 axum.workspace = true
-sqlx.workspace = true
+# Serde
 serde.workspace = true
 serde_json.workspace = true
+# UUID
 uuid.workspace = true
+# Chrono
 chrono.workspace = true
-deadpool-redis.workspace = true
-redis.workspace = true
+# Error handling
 thiserror.workspace = true
+# Tracing
 tracing.workspace = true
-async-trait.workspace = true
-http = "1"
+# Password hashing (argon2id)
+argon2 = { version = "0.5", features = ["std"] }
+sha2 = "0.10"
+# JWT
+jsonwebtoken = "9"

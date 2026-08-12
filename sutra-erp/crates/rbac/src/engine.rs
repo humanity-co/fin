@@ -1,4 +1,6 @@
+use crate::middleware::UserContext;
 use crate::models::UserPermission;
+use axum::{http::StatusCode, response::Json};
 use deadpool_redis::Pool as RedisPool;
 use redis::AsyncCommands;
 use sqlx::PgPool;
@@ -26,4 +28,25 @@ impl PermissionEngine {
   if rows.iter().any(|r| r.permission_code=="admin:role:manage") && finance { return Ok(false); }
   Ok(rows.iter().any(|r| r.permission_code==code && (r.scope_type=="GLOBAL" || r.scope_type==scope_type && (r.scope_id.is_none() || r.scope_id==scope_id))))
  }
+ /// Enforce a permission for the caller's context, denying by default.
+ ///
+ /// Scope type is fixed to `GLOBAL` — per-resource scope filtering is applied
+ /// separately via [`crate::ScopeFilter`] at the query layer.
+ ///
+ /// Returns the standard `(StatusCode, Json)` error envelope used by the API
+ /// handlers so the guard can be used directly with `?` in a handler body.
+ pub async fn require(&self, ctx: &UserContext, code: &str) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+  if self.has_permission(ctx.user_id, ctx.tenant_id, code, "GLOBAL", None).await.unwrap_or(false) {
+   return Ok(());
+  }
+  tracing::warn!(user_id=%ctx.user_id, permission=code, "permission denied");
+  Err((StatusCode::FORBIDDEN, Json(serde_json::json!({
+   "success": false,
+   "error": "permission denied",
+   "permission": code,
+   "data": null,
+  }))))
+ }
 }
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory

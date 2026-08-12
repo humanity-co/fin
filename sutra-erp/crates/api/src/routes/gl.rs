@@ -29,6 +29,7 @@ use sutra_finance_gl::{
     CreateJournalCmd, CreateJournalLineCmd, GlCommandHandler, GlQueryHandler,
     JournalFilter, PostJournalCmd, ReverseJournalCmd, TrialBalanceQuery,
 };
+use sutra_rbac::middleware::UserContext;
 
 use crate::state::AppState;
 
@@ -168,9 +169,14 @@ fn err_response(status: StatusCode, msg: String) -> (StatusCode, Json<serde_json
 
 /// POST /api/v1/gl/journals
 async fn create_journal(
+    user: UserContext,
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateJournalRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .permission_engine
+        .require(&user, "gl:journal:create")
+        .await?;
     let handler = GlCommandHandler::new(state.db.clone());
 
     // Parse posting date
@@ -218,10 +224,15 @@ async fn create_journal(
 
 /// POST /api/v1/gl/journals/:id/post
 async fn post_journal(
+    user: UserContext,
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
     Json(body): Json<PostJournalRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .permission_engine
+        .require(&user, "gl:journal:post")
+        .await?;
     let handler = GlCommandHandler::new(state.db.clone());
     let tenant_id = TenantId::from_uuid(Uuid::nil()); // TODO: From auth
 
@@ -238,10 +249,15 @@ async fn post_journal(
 
 /// POST /api/v1/gl/journals/:id/reverse
 async fn reverse_journal(
+    user: UserContext,
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
     Json(body): Json<ReverseJournalRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .permission_engine
+        .require(&user, "gl:journal:post")
+        .await?;
     let handler = GlCommandHandler::new(state.db.clone());
     let tenant_id = TenantId::from_uuid(Uuid::nil()); // TODO: From auth
 
@@ -262,9 +278,14 @@ async fn reverse_journal(
 
 /// GET /api/v1/gl/journals
 async fn list_journals(
+    user: UserContext,
     State(state): State<Arc<AppState>>,
     Query(query): Query<JournalListQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .permission_engine
+        .require(&user, "gl:journal:view")
+        .await?;
     let handler = GlQueryHandler::new(state.db.clone());
     let tenant_id = TenantId::from_uuid(Uuid::nil()); // TODO: From auth
 
@@ -290,9 +311,14 @@ async fn list_journals(
 
 /// GET /api/v1/gl/journals/:id
 async fn get_journal_by_id(
+    user: UserContext,
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .permission_engine
+        .require(&user, "gl:journal:view")
+        .await?;
     let handler = GlQueryHandler::new(state.db.clone());
     let tenant_id = TenantId::from_uuid(Uuid::nil()); // TODO: From auth
 
@@ -308,9 +334,14 @@ async fn get_journal_by_id(
 
 /// GET /api/v1/gl/trial-balance
 async fn get_trial_balance(
+    user: UserContext,
     State(state): State<Arc<AppState>>,
     Query(query): Query<TrialBalanceRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .permission_engine
+        .require(&user, "gl:coa:view")
+        .await?;
     let handler = GlQueryHandler::new(state.db.clone());
     let tenant_id = TenantId::from_uuid(Uuid::nil()); // TODO: From auth
 
@@ -332,8 +363,13 @@ async fn get_trial_balance(
 
 /// GET /api/v1/gl/accounts
 async fn get_chart_of_accounts(
+    user: UserContext,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .permission_engine
+        .require(&user, "gl:coa:view")
+        .await?;
     let handler = GlQueryHandler::new(state.db.clone());
     let tenant_id = TenantId::from_uuid(Uuid::nil()); // TODO: From auth
 
@@ -348,10 +384,15 @@ async fn get_chart_of_accounts(
 
 /// GET /api/v1/gl/accounts/:id/ledger
 async fn get_account_ledger(
+    user: UserContext,
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
     Query(query): Query<LedgerQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .permission_engine
+        .require(&user, "gl:coa:view")
+        .await?;
     let handler = GlQueryHandler::new(state.db.clone());
     let tenant_id = TenantId::from_uuid(Uuid::nil()); // TODO: From auth
 
@@ -373,3 +414,12 @@ async fn get_account_ledger(
         )),
     }
 }
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory

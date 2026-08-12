@@ -35,6 +35,7 @@ use sutra_finance_ap::{
     PostInvoiceCmd, ProcessPaymentCmd, RecordGoodsReceiptCmd,
     RecordVendorInvoiceCmd, ApError, UpdateVendorCmd,
 };
+use sutra_rbac::middleware::UserContext;
 
 use crate::state::AppState;
 
@@ -321,9 +322,14 @@ fn parse_date(s: &str) -> Option<chrono::NaiveDate> {
 
 /// POST /api/v1/ap/vendors
 async fn create_vendor(
+    user: UserContext,
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateVendorRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .permission_engine
+        .require(&user, "ap:vendor:create")
+        .await?;
     let handler = ApCommandHandler::new(state.db.clone());
     let tenant_id = TenantId::from_uuid(Uuid::nil());
     let created_by = Uuid::nil();
@@ -488,9 +494,14 @@ async fn get_vendor(
 
 /// POST /api/v1/ap/purchase-orders
 async fn create_purchase_order(
+    user: UserContext,
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreatePoRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .permission_engine
+        .require(&user, "ap:po:create")
+        .await?;
     let handler = ApCommandHandler::new(state.db.clone());
     let tenant_id = TenantId::from_uuid(Uuid::nil());
     let created_by = Uuid::nil();
@@ -535,10 +546,15 @@ async fn create_purchase_order(
 
 /// PUT /api/v1/ap/purchase-orders/:id/issue
 async fn issue_purchase_order(
+    user: UserContext,
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
     Json(body): Json<IssuePoRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .permission_engine
+        .require(&user, "ap:po:approve")
+        .await?;
     let handler = ApCommandHandler::new(state.db.clone());
     let tenant_id = TenantId::from_uuid(Uuid::nil());
 
@@ -591,9 +607,14 @@ async fn record_goods_receipt(
 
 /// POST /api/v1/ap/invoices
 async fn record_vendor_invoice(
+    user: UserContext,
     State(state): State<Arc<AppState>>,
     Json(body): Json<RecordInvoiceRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .permission_engine
+        .require(&user, "ap:invoice:create")
+        .await?;
     let handler = ApCommandHandler::new(state.db.clone());
     let tenant_id = TenantId::from_uuid(Uuid::nil());
     let created_by = Uuid::nil();
@@ -659,10 +680,15 @@ async fn match_invoice(
 
 /// PUT /api/v1/ap/invoices/:id/post
 async fn post_invoice(
+    user: UserContext,
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
     Json(body): Json<PostInvoiceRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .permission_engine
+        .require(&user, "ap:invoice:approve")
+        .await?;
     let handler = ApCommandHandler::new(state.db.clone());
     let tenant_id = TenantId::from_uuid(Uuid::nil());
 
@@ -683,9 +709,14 @@ async fn post_invoice(
 
 /// POST /api/v1/ap/payments
 async fn create_vendor_payment(
+    user: UserContext,
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreatePaymentRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .permission_engine
+        .require(&user, "ap:payment:create")
+        .await?;
     let handler = ApCommandHandler::new(state.db.clone());
     let tenant_id = TenantId::from_uuid(Uuid::nil());
     let created_by = Uuid::nil();
@@ -723,10 +754,15 @@ async fn create_vendor_payment(
 
 /// PUT /api/v1/ap/payments/:id/process
 async fn process_payment(
+    user: UserContext,
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
     Json(body): Json<ProcessPaymentRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .permission_engine
+        .require(&user, "ap:payment:approve")
+        .await?;
     let handler = ApCommandHandler::new(state.db.clone());
     let tenant_id = TenantId::from_uuid(Uuid::nil());
 
@@ -785,3 +821,11 @@ async fn list_tds_deductions(
         "total": result.len(),
     })))
 }
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
