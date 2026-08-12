@@ -6,12 +6,14 @@
 //! exposes journal posting but no account-creation handler.
 
 use chrono::{DateTime, NaiveDate, Utc};
+use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use sutra_core::{AuditInfo, EntityId, Money, TenantId};
+use sutra_finance_gl::repository::AccountRepository;
 
 use crate::errors::TreasuryError;
 use crate::models::bank_account::{BankAccount, BankAccountType, BankSignatory, SignatoryType};
@@ -476,7 +478,7 @@ pub struct MatchCandidate {
 
 /// A bank book row (Tally-style): every journal line touching the bank GL
 /// account, ordered by posting date.
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct BankBookRow {
     pub journal_id: Uuid,
     pub journal_number: String,
@@ -868,9 +870,10 @@ impl TreasuryRepository {
         tenant_id: Uuid,
         account_id: Uuid,
     ) -> Result<Option<sutra_finance_gl::models::account::Account>, TreasuryError> {
-        Ok(sutra_finance_gl::PgAccountRepository::new(self.pool.clone())
+        Ok(sutra_finance_gl::repository::PgAccountRepository::new(self.pool.clone())
             .find_by_id(tenant_id, account_id)
-            .await?)
+            .await
+            .map_err(|e| TreasuryError::Gl(e.to_string()))?)
     }
 
     pub async fn gl_account_balance(&self, tenant_id: Uuid, account_id: Uuid) -> Result<i64, TreasuryError> {
@@ -2098,7 +2101,7 @@ pub fn encrypt_secret(plain: &str) -> String {
 pub fn decrypt_secret(stored: &str) -> String {
     if let Some(rest) = stored.strip_prefix("e1:") {
         let key = encryption_key();
-        if let Ok(bytes) = hex_decode(rest) {
+        if let Some(bytes) = hex_decode(rest) {
             let mut out = Vec::with_capacity(bytes.len());
             for (i, b) in bytes.iter().enumerate() {
                 out.push(b ^ key[i % key.len()]);

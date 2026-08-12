@@ -6,14 +6,14 @@
 //! settlements and uncleared cheques.
 
 use chrono::NaiveDate;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::errors::TreasuryError;
 use crate::models::bank_account::{BankAccount, BankSignatory};
 use crate::models::gateway::{GatewaySettlement, PaymentGatewayConfig};
-use crate::models::petty_cash::{PettyCashFund, PettyCashTransaction};
+use crate::models::petty_cash::PettyCashFund;
 use crate::models::reconciliation::{
     BankReconciliation, BankStatementLine, BankTransaction, MatchStatus,
 };

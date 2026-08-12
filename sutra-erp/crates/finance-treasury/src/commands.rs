@@ -20,15 +20,17 @@ use tracing::info;
 use uuid::Uuid;
 
 use sutra_core::{AuditInfo, EntityId, Money, TenantId};
+use sutra_finance_gl::repository::{PeriodRepository, PgPeriodRepository};
 use sutra_finance_gl::{
-    CreateJournalCmd, CreateJournalLineCmd, GlCommandHandler, PgAccountRepository,
-    PgPeriodRepository, PostJournalCmd,
+    CreateJournalCmd, CreateJournalLineCmd, GlCommandHandler, PostJournalCmd,
 };
 
 use crate::errors::TreasuryError;
 use crate::events::{write_outbox, TreasuryEventData};
-use crate::models::bank_account::{BankAccount, BankAccountType, SignatoryType};
-use crate::models::gateway::{GatewaySettlement, GatewaySettlementStatus, GatewayType};
+use crate::models::bank_account::{BankAccount, BankAccountType};
+use crate::models::gateway::{
+    GatewaySettlement, GatewaySettlementStatus, GatewayType, PaymentGatewayConfig,
+};
 use crate::models::petty_cash::{
     PettyCashFund, PettyCashFundStatus, PettyCashTransaction, PettyCashTransactionType,
 };
@@ -36,7 +38,7 @@ use crate::models::reconciliation::{
     BankReconciliation, BankReconciliationStatus, BankStatementLine, MatchStatus,
 };
 use crate::models::transfer::{InterBankTransfer, InterBankTransferStatus};
-use crate::repository::{decrypt_secret, encrypt_secret, TreasuryRepository};
+use crate::repository::{encrypt_secret, TreasuryRepository};
 
 // ─── Command payloads ─────────────────────────────────────────────────
 
@@ -2231,7 +2233,7 @@ pub fn parse_statement(format: &str, content: &str) -> Result<Vec<ParsedStatemen
 
 fn parse_csv(content: &str) -> Result<Vec<ParsedStatementLine>, String> {
     let mut out = Vec::new();
-    let mut reader = csv_reader(content);
+    let reader = csv_reader(content);
     // Skip a header row when the first line looks like a header.
     if let Some(first) = reader.first().cloned() {
         let looks_header = first
@@ -2241,7 +2243,7 @@ fn parse_csv(content: &str) -> Result<Vec<ParsedStatementLine>, String> {
             push_csv_line(&mut out, &first)?;
         }
     }
-    for row in reader.skip(1) {
+    for row in reader.into_iter().skip(1) {
         push_csv_line(&mut out, &row)?;
     }
     if out.is_empty() {

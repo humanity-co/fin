@@ -1,5 +1,5 @@
 //! Treasury models — inter-bank transfers.
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use sutra_core::{AuditInfo, EntityId, Money, TenantId};
 use uuid::Uuid;
