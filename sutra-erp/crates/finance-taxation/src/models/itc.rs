@@ -101,7 +101,9 @@ pub struct ItcRegister {
 ///
 /// `itc_eligibility` must match the account's `itc_eligibility` at posting;
 /// Rule 42/43 lines carry `reversal_percent` and `reversal_amount` and are
-/// flagged `is_reversed` once the reversal journal is posted.
+/// flagged `is_reversed` once the reversal journal is posted. Capital-goods
+/// lines (Rule 43) carry `acquisition_period` ("MMYYYY") so the 60-month
+/// reversal horizon is measured from the actual acquisition month.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ItcRegisterLine {
     pub itc_register_line_id: EntityId<ItcRegisterLine>,
@@ -117,6 +119,8 @@ pub struct ItcRegisterLine {
     pub sgst: i64,
     pub total_tax: i64,
     pub itc_eligibility: ItcEligibility,
+    /// Capital-goods acquisition month "MMYYYY" (Rule 43 horizon).
+    pub acquisition_period: Option<String>,
     pub reversal_percent: Option<Decimal>,
     pub reversal_amount: Option<i64>,
     pub is_reversed: bool,

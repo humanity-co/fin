@@ -50,6 +50,11 @@ pub struct TdsSection {
     pub threshold_per_payment: Option<i64>,
     /// Threshold on aggregate payments in the FY (paise).
     pub threshold_aggregate: Option<i64>,
+    /// s.194Q-style: TDS applies only on the value exceeding the
+    /// FY-aggregate threshold (CBDT Circular 17/2020). `None` per-payment
+    /// threshold sections (194A/194I/194Q) have no per-payment relief —
+    /// only the FY aggregate gates the deduction.
+    pub threshold_excess_only: bool,
     pub applicable_to: TdsSectionApplicableTo,
     pub is_active: bool,
     pub effective_from: NaiveDate,

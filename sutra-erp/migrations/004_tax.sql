@@ -157,6 +157,14 @@ ALTER TABLE tds_sections ADD COLUMN IF NOT EXISTS
 ALTER TABLE tds_sections ADD COLUMN IF NOT EXISTS effective_to DATE;
 ALTER TABLE tds_sections ADD COLUMN IF NOT EXISTS created_by UUID;
 ALTER TABLE tds_sections ADD COLUMN IF NOT EXISTS updated_by UUID;
+-- s.194Q-style thresholds: TDS applies only on the value EXCEEDING the
+-- FY-aggregate threshold (CBDT Circular 17/2020). FALSE for every other
+-- section. (CA review S6.)
+ALTER TABLE tds_sections ADD COLUMN IF NOT EXISTS
+    threshold_excess_only BOOLEAN NOT NULL DEFAULT FALSE;
+COMMENT ON COLUMN tds_sections.threshold_excess_only IS
+    'TRUE = TDS is computed only on the excess over the FY-aggregate threshold (194Q, CBDT Circular 17/2020); '
+    'FALSE = TDS on the full payment once a threshold is crossed.';
 -- Future inserts must specify the tenant and the effective start explicitly.
 ALTER TABLE tds_sections ALTER COLUMN tenant_id DROP DEFAULT;
 ALTER TABLE tds_sections ALTER COLUMN effective_from DROP DEFAULT;
@@ -170,14 +178,47 @@ COMMENT ON COLUMN tds_sections.effective_from IS
 COMMENT ON COLUMN tds_sections.effective_to IS
     'Effective end; NULL = current. New Finance Act rates insert a new row.';
 
+-- ── TDS section master — GLOBAL defaults (module-spec §TDS rates) ─────
+-- Statutory rates/thresholds per module-specs.md §7 (CD §2.1); a tenant row
+-- overrides the GLOBAL default. 194Q carries threshold_excess_only = TRUE
+-- (0.1% TDS on the value over ₹50,00,000 in the FY — CBDT Circular 17/2020).
+INSERT INTO tds_sections
+    (tenant_id, section_code, description, default_rate,
+     threshold_per_payment, threshold_aggregate, applicable_to, is_active,
+     effective_from, effective_to, threshold_excess_only)
+VALUES
+    ('00000000-0000-0000-0000-000000000000', '194A', 'Interest other than on securities', 10.00,
+     NULL, 4000000, 'RESIDENT_INDIVIDUAL', TRUE, '1970-01-01', NULL, FALSE),
+    ('00000000-0000-0000-0000-000000000000', '194C', 'Payments to contractors', 1.00,
+     3000000, 10000000, 'ALL', TRUE, '1970-01-01', NULL, FALSE),
+    ('00000000-0000-0000-0000-000000000000', '194H', 'Commission or brokerage', 5.00,
+     NULL, 1500000, 'ALL', TRUE, '1970-01-01', NULL, FALSE),
+    ('00000000-0000-0000-0000-000000000000', '194I', 'Rent', 10.00,
+     NULL, 24000000, 'ALL', TRUE, '1970-01-01', NULL, FALSE),
+    ('00000000-0000-0000-0000-000000000000', '194J', 'Professional / technical fees', 10.00,
+     3000000, NULL, 'ALL', TRUE, '1970-01-01', NULL, FALSE),
+    ('00000000-0000-0000-0000-000000000000', '194Q', 'Purchase of goods (buyer)', 0.10,
+     NULL, 500000000, 'ALL', TRUE, '1970-01-01', NULL, TRUE)
+ON CONFLICT (tenant_id, section_code, effective_from) DO NOTHING;
+
 -- ── Tax policy defaults (configurable — never hardcoded) ──────────────
 -- Values are JSONB per the system_config schema; GLOBAL rows (tenant_id
 -- NULL) are defaults that a tenant row can override.
 INSERT INTO system_config (tenant_id, config_key, config_value, scope, description)
 VALUES
-    (NULL, 'tax.itc_reversal_tolerance_percent', '5',   'GLOBAL', 'Rule 42 de-minimis: no reversal required when computed reversal ≤ 5% of C2 (CGST Rules r.42(1)(m)) — statute default, configurable'),
+    (NULL, 'tax.itc_reversal_deminimis_paise', '500000', 'GLOBAL', 'Rule 42 de-minimis: no reversal required when the computed reversal ≤ ₹5,000 per tax period (proviso to CGST Rules r.42(1); CA review DE-MINIMIS) — configurable'),
     (NULL, 'tax.income_application_threshold',   '85',  'GLOBAL', 'Minimum % of income that must be applied to educational purposes (IT Act s.11(1)(a))'),
     (NULL, 'tax.accumulation_years',             '5',   'GLOBAL', 'Maximum period (years) unapplied income may be accumulated under s.11(2)'),
     (NULL, 'tax.fcra_admin_expense_ratio_limit', '20',  'GLOBAL', 'FCRA 2010 s.17 — administrative expenses must be ≤ 20% of FCRA receipts'),
     (NULL, 'tax.tds_deposit_due_day',            '7',   'GLOBAL', 'TDS deposits due by the 7th of the following month (IT Rules r.30)')
 ON CONFLICT (tenant_id, config_key, valid_from) DO NOTHING;
+-- Legacy Rule 42 tolerance key (≤ % of C2) is superseded by the fixed
+-- de-minimis above (proviso to r.42(1)); remove any seeded row.
+DELETE FROM system_config WHERE config_key = 'tax.itc_reversal_tolerance_percent';
+
+-- ── itc_register_lines: Rule 43 acquisition period (N1) ────────────────
+-- Month of capital-goods acquisition ("MMYYYY") so the 60-month reversal
+-- horizon (CGST Rules r.43) is bounded from the actual acquisition month.
+ALTER TABLE itc_register_lines ADD COLUMN IF NOT EXISTS acquisition_period TEXT;
+COMMENT ON COLUMN itc_register_lines.acquisition_period IS
+    'Capital-goods acquisition month "MMYYYY" — Rule 43 reversals stop after month 60 from this month (CGST Rules r.43(1)).';

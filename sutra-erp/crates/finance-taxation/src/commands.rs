@@ -199,6 +199,11 @@ pub struct TdsComputation {
     pub effective_rate: Decimal,
     /// TDS amount in paise.
     pub tds_amount: i64,
+    /// Taxable base the TDS was computed on (paise). For excess-only
+    /// thresholds (s.194Q, CBDT Circular 17/2020) this is the portion of
+    /// the payment exceeding the FY-aggregate threshold, not the full
+    /// payment.
+    pub taxable_base: i64,
     pub threshold_status: TdsThresholdStatus,
     /// True when PAN was missing/invalid — 20% forced under s.206AA.
     pub pan_missing: bool,
@@ -323,6 +328,7 @@ impl TdsComputationService {
                 section_code: section.section_code.clone(),
                 effective_rate: rate,
                 tds_amount: pct_round(input.payment_amount, rate_to_bp(rate), 10_000),
+                taxable_base: input.payment_amount,
                 threshold_status: TdsThresholdStatus::PanMissing,
                 pan_missing: true,
                 certificate_rate: None,
@@ -340,11 +346,16 @@ impl TdsComputationService {
             None => (section.default_rate, false),
         };
 
-        // Thresholds (per-payment & FY aggregate).
+        // Thresholds (per-payment & FY aggregate). CA review S6:
+        // `threshold_per_payment == None` (194A ₹40k, 194I ₹2.4L, 194Q ₹50L
+        // — FY-aggregate-only sections) means there is NO per-payment
+        // relief; the per-payment gate must not force a deduction from the
+        // first rupee. `is_none_or` gives None → "below" (no per-payment
+        // crossing), so only the FY aggregate decides. An absent aggregate
+        // threshold means no aggregate relief → deduct immediately.
         let below_per_payment = section
             .threshold_per_payment
-            .map(|t| input.payment_amount <= t)
-            .unwrap_or(false);
+            .is_none_or(|t| input.payment_amount <= t);
         let below_aggregate = section
             .threshold_aggregate
             .map(|t| input.aggregate_ytd_payments + input.payment_amount <= t)
@@ -354,6 +365,7 @@ impl TdsComputationService {
                 section_code: section.section_code.clone(),
                 effective_rate: Decimal::ZERO,
                 tds_amount: 0,
+                taxable_base: 0,
                 threshold_status: TdsThresholdStatus::BelowThreshold,
                 pan_missing: false,
                 certificate_rate: cert_rate,
@@ -362,10 +374,24 @@ impl TdsComputationService {
         }
 
         let bp = rate_to_bp(rate);
+        // CA review S6 — s.194Q (CBDT Circular 17/2020): TDS applies only
+        // on the value EXCEEDING the FY-aggregate threshold. `headroom` is
+        // how much of the aggregate threshold this payment can still absorb;
+        // the excess of this payment over the headroom is the taxable base.
+        let taxable_base = if section.threshold_excess_only {
+            let headroom = section
+                .threshold_aggregate
+                .map(|t| (t.saturating_sub(input.aggregate_ytd_payments)).max(0))
+                .unwrap_or(0);
+            input.payment_amount.saturating_sub(headroom)
+        } else {
+            input.payment_amount
+        };
         Ok(TdsComputation {
             section_code: section.section_code.clone(),
             effective_rate: rate,
-            tds_amount: pct_round(input.payment_amount, bp, 10_000),
+            tds_amount: pct_round(taxable_base, bp, 10_000),
+            taxable_base,
             threshold_status: TdsThresholdStatus::Applicable,
             pan_missing: false,
             certificate_rate: cert_rate,
@@ -403,7 +429,8 @@ impl TaxCommandHandler {
     /// Deposit deducted TDS to the government (ITNS-281 challan).
     ///
     /// State machine (deduction deposit leg): PENDING → DEPOSITED.
-    /// Posts `DR TDS Payable (24.03) / CR Bank` via the GL module and
+    /// Posts `DR TDS Payable (24.03.<section>) / CR Bank` (one DR per
+    /// section covered by the challan — CA review S7) via the GL module and
     /// emits one `TdsDeposited` per deduction.
     pub async fn deposit_tds_to_govt(
         &self,
@@ -445,14 +472,11 @@ impl TaxCommandHandler {
             ));
         }
 
-        // 3. GL accounts: DR TDS Payable (24.03) / CR Bank.
-        let (tds_payable_account, _tds_payable_code) = self
-            .repo
-            .find_account_by_code_prefix(tid, "24.03")
-            .await?
-            .ok_or_else(|| {
-                TaxError::Gl("TDS Payable GL account (24.03) not found in chart of accounts".to_string())
-            })?;
+        // 3. GL accounts: DR each section's TDS Payable leaf (24.03.<section>)
+        // / CR Bank. CA review S7: AP credits per-section leaves
+        // (24.03.194C, 24.03.194J, …); debiting one arbitrary "24.03" leaf
+        // for the whole challan strands the per-section balances. One
+        // multi-line journal, one DR per section covered by the challan.
         let (bank_gl_account, _bank_type, _bank_name) = self
             .repo
             .bank_gl_account(tid, cmd.bank_account_id)
@@ -467,6 +491,56 @@ impl TaxCommandHandler {
             ))
         })?;
 
+        // Group the challan's deductions by TDS section (deterministic
+        // order) so each section's payable leaf is cleared to zero.
+        let mut by_section: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
+        for d in &deductions {
+            *by_section.entry(d.tds_section.clone()).or_insert(0) += d.tds_amount;
+        }
+        // Resolve each section's leaf; fall back to the 24.03 parent when a
+        // per-section leaf has not been created in the chart of accounts.
+        let sections: Vec<String> = by_section.keys().cloned().collect();
+        let tds_payable_accounts = self
+            .repo
+            .find_tds_payable_accounts(tid, &sections)
+            .await?;
+
+        let mut lines: Vec<CreateJournalLineCmd> = Vec::new();
+        let mut line_number = 1;
+        let mut dr_total = 0i64;
+        for (section, amount) in &by_section {
+            let account_id = tds_payable_accounts.get(section).copied().ok_or_else(|| {
+                TaxError::Gl(format!(
+                    "TDS Payable GL account (24.03.{section}) not found in chart of accounts"
+                ))
+            })?;
+            dr_total += *amount;
+            lines.push(CreateJournalLineCmd {
+                line_number,
+                account_id,
+                debit_amount: Some(Money::from_paise(*amount)),
+                credit_amount: None,
+                description: Some(format!("TDS payable (s.{section}) cleared via challan {}", challan)),
+                cost_center_id: None,
+                fund_id: None,
+                reference_id: Some(challan.clone()),
+                reference_type: Some("TDS_DEPOSIT".to_string()),
+            });
+            line_number += 1;
+        }
+        debug_assert_eq!(dr_total, total_amount, "section DR lines must sum to the challan total");
+        lines.push(CreateJournalLineCmd {
+            line_number,
+            account_id: bank_gl_account,
+            debit_amount: None,
+            credit_amount: Some(Money::from_paise(total_amount)),
+            description: Some(format!("Bank payment for challan {}", challan)),
+            cost_center_id: None,
+            fund_id: None,
+            reference_id: Some(challan.clone()),
+            reference_type: Some("TDS_DEPOSIT".to_string()),
+        });
+
         let journal_id = self
             .post_to_gl(
                 tenant_id,
@@ -475,30 +549,7 @@ impl TaxCommandHandler {
                 entity_id,
                 cmd.deposit_date,
                 format!("TDS deposit to government — challan {}", challan),
-                vec![
-                    CreateJournalLineCmd {
-                        line_number: 1,
-                        account_id: tds_payable_account,
-                        debit_amount: Some(Money::from_paise(total_amount)),
-                        credit_amount: None,
-                        description: Some(format!("TDS payable cleared via challan {}", challan)),
-                        cost_center_id: None,
-                        fund_id: None,
-                        reference_id: Some(challan.clone()),
-                        reference_type: Some("TDS_DEPOSIT".to_string()),
-                    },
-                    CreateJournalLineCmd {
-                        line_number: 2,
-                        account_id: bank_gl_account,
-                        debit_amount: None,
-                        credit_amount: Some(Money::from_paise(total_amount)),
-                        description: Some(format!("Bank payment for challan {}", challan)),
-                        cost_center_id: None,
-                        fund_id: None,
-                        reference_id: Some(challan.clone()),
-                        reference_type: Some("TDS_DEPOSIT".to_string()),
-                    },
-                ],
+                lines,
                 None,
             )
             .await?;
@@ -670,6 +721,21 @@ impl TaxCommandHandler {
             } else {
                 itc_on_inputs += eligible_tax;
             }
+            // N1: capital-goods lines carry the acquisition month
+            // ("MMYYYY") so the Rule 43 60-month reversal horizon is
+            // measured from the actual acquisition date.
+            let acquisition_period = if matches!(
+                eligibility,
+                ItcEligibility::CapitalGoods | ItcEligibility::Reversal43
+            ) {
+                Some(format!(
+                    "{:02}{}",
+                    inv.invoice_date.month(),
+                    inv.invoice_date.year()
+                ))
+            } else {
+                None
+            };
             register_lines.push(ItcRegisterLine {
                 itc_register_line_id: EntityId::new(),
                 tenant_id,
@@ -684,6 +750,7 @@ impl TaxCommandHandler {
                 sgst,
                 total_tax: eligible_tax,
                 itc_eligibility: eligibility,
+                acquisition_period,
                 reversal_percent: None,
                 reversal_amount: None,
                 is_reversed: false,
@@ -790,9 +857,17 @@ impl TaxCommandHandler {
     ///
     /// C1 = ITC on inputs/input services; D1 = exclusively taxable use;
     /// D2 = exclusively exempt use; C2 = C1 − D1 − D2.
-    /// Reversal = C2 × (E/F), monthly. De-minimis (r.42(1)(m)): no
-    /// reversal when the computed amount ≤ `itc_reversal_tolerance_percent`
-    /// of C2 (policy default 5% — the statutory figure).
+    /// Reversal = C2 × (E/F), monthly.
+    ///
+    /// Documented simplifications (CA review DE-MINIMIS):
+    /// (i) D1 = D2 = 0 — the register does not separate exclusively
+    ///     taxable/exempt use, so C2 = C1 (CONSERVATIVE: can over-reverse).
+    /// (ii) r.42(1)(e) 5%-of-common-credit deemed non-business reversal is
+    ///     treated as determined-0 and NOT added to the reversal.
+    ///
+    /// De-minimis: no reversal when the computed reversal ≤
+    /// `tax.itc_reversal_deminimis_paise` (proviso to CGST Rules r.42(1);
+    /// default ₹5,000 per tax period — configurable).
     pub async fn compute_rule42_reversal(
         &self,
         tenant_id: TenantId,
@@ -831,9 +906,17 @@ impl TaxCommandHandler {
         } else {
             pct_round(c2, cmd.exempt_turnover, cmd.total_turnover)
         };
-        // De-minimis: no reversal if computed ≤ tolerance% of C2.
-        let tolerance_paise = pct_round(c2, policy.itc_reversal_tolerance_percent, 100);
-        let final_reversal = if reversal <= tolerance_paise { 0 } else { reversal };
+        // CA review DE-MINIMIS — fixed statutory de-minimis: no reversal
+        // when the computed reversal ≤ the policy's fixed paise amount
+        // (proviso to CGST Rules r.42(1): ₹5,000 per tax period, default
+        // `tax.itc_reversal_deminimis_paise` = 500_000 paise). Replaces the
+        // former "≤ 5% of C2" tolerance, which misapplied the r.42(1)(e)
+        // deemed-reversal fraction as a de-minimis.
+        let final_reversal = if reversal <= policy.itc_reversal_deminimis_paise {
+            0
+        } else {
+            reversal
+        };
 
         // Per-line reversal amounts (REVERSAL_42 lines only).
         let ratio = percent_2dp(cmd.exempt_turnover, cmd.total_turnover).unwrap_or(Decimal::ZERO);
@@ -916,9 +999,20 @@ impl TaxCommandHandler {
             });
         }
         let lines = self.repo.list_itc_register_lines(tid, *register.itc_register_id.as_uuid()).await?;
+        // N1: capital goods leave the Rule 43 pool after month 60 from their
+        // acquisition month (r.43(1)); lines without acquisition_period
+        // (legacy) stay in the horizon.
+        let in_horizon = |l: &ItcRegisterLine| -> bool {
+            l.acquisition_period
+                .as_deref()
+                .and_then(|a| months_between_periods(a, &cmd.period))
+                .map(|m| m < 60)
+                .unwrap_or(true)
+        };
         let tc: i64 = lines
             .iter()
             .filter(|l| matches!(l.itc_eligibility, ItcEligibility::CapitalGoods | ItcEligibility::Reversal43))
+            .filter(|l| in_horizon(l))
             .map(|l| l.total_tax)
             .sum();
         // Monthly reversal = (TC/60) × (E/F); aggregate over the 60-month
@@ -934,7 +1028,7 @@ impl TaxCommandHandler {
         for line in lines.iter().filter(|l| {
             matches!(l.itc_eligibility, ItcEligibility::CapitalGoods | ItcEligibility::Reversal43)
         }) {
-            let line_reversal = if monthly == 0 {
+            let line_reversal = if monthly == 0 || !in_horizon(line) {
                 0
             } else {
                 let line_monthly = pct_round(line.total_tax, 1, 60);
@@ -1293,15 +1387,20 @@ impl TaxCommandHandler {
             .gst_journal_aggregates(tid, registration.entity_id, cmd.period_start, cmd.period_end)
             .await?;
 
-        // B2C supplies (4B) grouped by rate; nil/exempt (7).
+        // B2C supplies (4B) grouped by rate; nil-rated/exempt (7). CA
+        // review S5: EXEMPT → expt_amt, NIL → nil_amt (reported separately).
         let mut b2c_by_rate: Vec<(Decimal, i64, i64, i64, i64)> = vec![]; // (rate, taxable, igst, cgst, sgst)
         let mut nil_taxable = 0i64;
+        let mut expt_taxable = 0i64;
         for agg in &aggregates {
             let class = agg.gst_classification.to_uppercase();
-            let is_exempt = class == "EXEMPT" || class == "NIL";
             let net = agg.net_amount.max(0);
             let tax = agg.tax_amount.unwrap_or(0).max(0);
-            if is_exempt {
+            if class == "EXEMPT" {
+                expt_taxable += net;
+                continue;
+            }
+            if class == "NIL" {
                 nil_taxable += net;
                 continue;
             }
@@ -1324,39 +1423,50 @@ impl TaxCommandHandler {
             }
         }
 
-        // RCM leg: from vendor invoices flagged is_rcm in the period.
-        let rcm_invoices = self
-            .repo
-            .posted_vendor_invoices(tid, registration.entity_id, cmd.period_start, cmd.period_end)
-            .await?;
-        let rcm_taxable: i64 = rcm_invoices.iter().filter(|i| i.is_rcm).map(|i| i.invoice_amount).sum();
-        let rcm_tax: i64 = rcm_invoices
-            .iter()
-            .filter(|i| i.is_rcm)
-            .map(|i| i.tax_amount)
-            .sum();
+        // CA review S4: reverse-charge inward supplies are NOT reported in
+        // GSTR-1 (`rcm_supplies` is not a valid GSTN section key — the valid
+        // ones are 4A/4B/4C/6/7); RCM output is reported in GSTR-3B 3.1(d).
+        // GSTR-1 tax liability is therefore outward supplies only.
+        let b2c_txval: i64 = b2c_by_rate.iter().map(|e| e.1).sum();
+        let b2c_tax: i64 = b2c_by_rate.iter().map(|e| e.2 + e.3 + e.4).sum();
+        let tax_liability: i64 = b2c_tax;
 
-        let tax_liability: i64 = b2c_by_rate.iter().map(|e| e.2 + e.3 + e.4).sum::<i64>() + rcm_tax;
+        // CA review B2 — cross-check against a generated GSTR-3B: both
+        // returns must report the same outward taxable value and tax
+        // (same tax-exclusive `net_amount` convention).
+        self.cross_check_gstr_consistency(
+            tid,
+            cmd.gst_registration_id,
+            &cmd.period,
+            GstReturnType::Gstr1,
+            "4B",
+            b2c_txval,
+            b2c_tax,
+            GstReturnType::Gstr3b,
+            "3.1(a)",
+        )
+        .await?;
 
-        // GSTN-schema-shaped payload (GSTR-1).
+        // GSTN-schema-shaped payload (GSTR-1). CA review S5: b2cs entries
+        // carry `pos` (place of supply — the registration state for
+        // intra-state supplies); the nil table splits EXEMPT → expt_amt and
+        // NIL → nil_amt. CA review S4: no `rcm_supplies` block (invalid
+        // GSTN key) — RCM is reported in GSTR-3B 3.1(d) only.
         let json_data = serde_json::json!({
             "gstin": registration.gstin,
             "fp": cmd.period,
             "gstr1": {
                 "b2cs": b2c_by_rate.iter().map(|(rate, txval, igst, cgst, sgst)| serde_json::json!({
                     "sply_ty": "INTRA",
+                    "pos": registration.state_code,
                     "rt": rate.to_string(),
                     "txval": txval,
                     "iamt": igst,
                     "camt": cgst,
                     "samt": sgst,
                 })).collect::<Vec<_>>(),
-                "nil": [ { "sply_ty": "INTRAB2C", "expt_amt": 0, "ngsup_amt": 0, "nil_amt": nil_taxable } ],
+                "nil": [ { "sply_ty": "INTRAB2C", "expt_amt": expt_taxable, "ngsup_amt": 0, "nil_amt": nil_taxable } ],
                 "doc_issue": [],
-            },
-            "rcm_supplies": {
-                "txval": rcm_taxable,
-                "tax": rcm_tax,
             },
         });
 
@@ -1412,21 +1522,8 @@ impl TaxCommandHandler {
             cess_amount: 0,
             audit: AuditInfo::new(user_id),
         });
-        if rcm_tax > 0 {
-            lines.push(GstReturnLine {
-                gst_return_line_id: EntityId::new(),
-                tenant_id,
-                gst_return_id: return_id,
-                section: "RCM".to_string(),
-                description: Some("Inward supplies liable to reverse charge".to_string()),
-                taxable_value: rcm_taxable,
-                igst_amount: 0,
-                cgst_amount: rcm_tax,
-                sgst_amount: 0,
-                cess_amount: 0,
-                audit: AuditInfo::new(user_id),
-            });
-        }
+        // CA review S4: no "RCM" section line — not a valid GSTN GSTR-1
+        // section (valid: 4A/4B/4C/6/7); RCM reported in GSTR-3B 3.1(d).
         for line in &lines {
             self.repo.insert_gst_return_line(line).await?;
         }
@@ -1483,33 +1580,56 @@ impl TaxCommandHandler {
         let mut igst = 0i64;
         let mut cgst = 0i64;
         let mut sgst = 0i64;
+        let mut nil_amt = 0i64; // S1: nil-rated turnover
+        let mut expt_amt = 0i64; // S1: exempt turnover
         for agg in &aggregates {
             let class = agg.gst_classification.to_uppercase();
-            if class == "EXEMPT" || class == "NIL" {
-                continue;
-            }
             let net = agg.net_amount.max(0);
             let tax = agg.tax_amount.unwrap_or(0).max(0);
+            if class == "EXEMPT" {
+                expt_amt += net;
+                continue;
+            }
+            if class == "NIL" {
+                nil_amt += net;
+                continue;
+            }
             // Default intra-state split (documented assumption — the
             // journal line does not carry the customer's state).
             let c = tax / 2;
-            taxable_value += net - tax;
+            // CA review B2: `net_amount` IS the tax-exclusive taxable value
+            // (spec convention — income credited net, GST to 24.01, tax on
+            // the classified line); do NOT subtract the tax again.
+            taxable_value += net;
             cgst += c;
             sgst += tax - c;
             igst += 0;
         }
 
-        // 3.1(d) RCM output — from posted RCM-flagged invoices.
+        // 3.1(d) RCM output — from posted RCM-flagged invoices. CA review
+        // S3: split by vendor state vs the registration state (same state →
+        // CGST/SGST; cross-state/import → IGST), derived from the vendor's
+        // GSTIN state code.
         let rcm_invoices = self
             .repo
             .posted_vendor_invoices(tid, registration.entity_id, cmd.period_start, cmd.period_end)
             .await?;
         let rcm_taxable: i64 = rcm_invoices.iter().filter(|i| i.is_rcm).map(|i| i.invoice_amount).sum();
-        let rcm_output_tax: i64 = rcm_invoices
-            .iter()
-            .filter(|i| i.is_rcm)
-            .map(|i| i.tax_amount)
-            .sum();
+        let mut rcm_igst = 0i64;
+        let mut rcm_cgst = 0i64;
+        let mut rcm_sgst = 0i64;
+        for inv in rcm_invoices.iter().filter(|i| i.is_rcm) {
+            let t = inv.tax_amount;
+            let vendor_state = pan_state_code(inv.vendor_gstin.as_deref());
+            if vendor_state == Some(registration.state_code.as_str()) {
+                let c = t / 2;
+                rcm_cgst += c;
+                rcm_sgst += t - c;
+            } else {
+                rcm_igst += t;
+            }
+        }
+        let rcm_output_tax = rcm_igst + rcm_cgst + rcm_sgst;
 
         // 4(A) eligible ITC from the ITC register for the period (if
         // computed); 4(B)(2) RCM ITC from the RCM ITC account balance.
@@ -1517,19 +1637,98 @@ impl TaxCommandHandler {
             .repo
             .find_itc_register(tid, cmd.gst_registration_id, &cmd.period)
             .await?;
-        let eligible_itc = itc_register.map(|r| r.net_itc_eligible).unwrap_or(0);
-        let rcm_itc = match self.repo.find_rcm_itc_account(tid).await? {
-            Some((acc, _)) => self
+        let eligible_itc = itc_register.as_ref().map(|r| r.net_itc_eligible).unwrap_or(0);
+        // CA review B1: `gl_account_balance` returns credits − debits and
+        // RCM ITC Recoverable is a debit-balance asset, so the RCM ITC
+        // figure is the NEGATED balance — `.max(0)` alone yielded 0 forever.
+        let rcm_itc_gross = match self.repo.find_rcm_itc_account(tid).await? {
+            Some((acc, _)) => (-self
                 .repo
                 .gl_account_balance(tid, acc, cmd.period_start, cmd.period_end)
-                .await?
+                .await?)
                 .max(0),
             None => 0,
+        };
+        // CA review S9 (s.16(2)(d)): RCM ITC is claimable only to the
+        // extent the RCM tax was PAID in the period. Payments show as
+        // debits on RCM Payable (24.02); balance = credits − debits, so
+        // paid = −balance. The claim is capped at the paid amount and an
+        // alert event is emitted when the cap binds.
+        let rcm_tax_paid = match self.repo.find_account_by_code_prefix(tid, "24.02").await? {
+            Some((acc, _)) => (-self
+                .repo
+                .gl_account_balance(tid, acc, cmd.period_start, cmd.period_end)
+                .await?)
+                .max(0),
+            None => 0,
+        };
+        let rcm_itc_capped = rcm_itc_gross > rcm_tax_paid;
+        // CA review S3: 4(B)(2) uses the same vendor-state split as 3.1(d),
+        // capped proportionally when the paid gate (S9) binds.
+        let (rcm_itc_igst, rcm_itc_cgst, rcm_itc_sgst) = if rcm_itc_capped && rcm_itc_gross > 0 {
+            (
+                pct_round(rcm_igst, rcm_tax_paid, rcm_itc_gross),
+                pct_round(rcm_cgst, rcm_tax_paid, rcm_itc_gross),
+                pct_round(rcm_sgst, rcm_tax_paid, rcm_itc_gross),
+            )
+        } else {
+            (rcm_igst, rcm_cgst, rcm_sgst)
+        };
+        let rcm_itc = rcm_itc_igst + rcm_itc_cgst + rcm_itc_sgst;
+
+        // CA review S2: 4(A) split by the ITC register's actual
+        // IGST/CGST/SGST composition (not a blind half-half), scaled to the
+        // net eligible ITC (post Rule 42/43 reversal).
+        let (iamt_4a, camt_4a, samt_4a) = if let Some(reg) = &itc_register {
+            let lines = self
+                .repo
+                .list_itc_register_lines(tid, *reg.itc_register_id.as_uuid())
+                .await?;
+            let mut ig = 0i64;
+            let mut cg = 0i64;
+            let mut sg = 0i64;
+            for l in &lines {
+                let comp = l.igst + l.cgst + l.sgst;
+                if comp <= 0 {
+                    continue;
+                }
+                // Scale each line's tax split by its eligibility fraction
+                // (BLOCKED lines carry total_tax = 0 — s.17(5) excluded).
+                ig += pct_round(l.igst, l.total_tax, comp);
+                cg += pct_round(l.cgst, l.total_tax, comp);
+                sg += pct_round(l.sgst, l.total_tax, comp);
+            }
+            let comp_total = ig + cg + sg;
+            if comp_total > 0 {
+                let i = pct_round(eligible_itc, ig, comp_total);
+                let c = pct_round(eligible_itc, cg, comp_total);
+                (i, c, eligible_itc - i - c)
+            } else {
+                let c = eligible_itc / 2;
+                (0, c, eligible_itc - c)
+            }
+        } else {
+            let c = eligible_itc / 2;
+            (0, c, eligible_itc - c)
         };
 
         let tax_liability = igst + cgst + sgst + rcm_output_tax;
         let itc_claimed = eligible_itc + rcm_itc;
         let net_tax_payable = (tax_liability - itc_claimed).max(0);
+
+        // CA review B2 — cross-check against a generated GSTR-1.
+        self.cross_check_gstr_consistency(
+            tid,
+            cmd.gst_registration_id,
+            &cmd.period,
+            GstReturnType::Gstr3b,
+            "3.1(a)",
+            taxable_value,
+            igst + cgst + sgst,
+            GstReturnType::Gstr1,
+            "4B",
+        )
+        .await?;
 
         let json_data = serde_json::json!({
             "gstin": registration.gstin,
@@ -1537,12 +1736,12 @@ impl TaxCommandHandler {
             "gstr3b": {
                 "sup_details": {
                     "osup_det": { "txval": taxable_value, "iamt": igst, "camt": cgst, "samt": sgst },
-                    "osup_nil_exmp": { "txval": 0, "nil_amt": 0, "expt_amt": 0 },
-                    "isup_rev": { "txval": rcm_taxable, "iamt": 0, "camt": rcm_output_tax, "samt": 0 },
+                    "osup_nil_exmp": { "txval": 0, "nil_amt": nil_amt, "expt_amt": expt_amt },
+                    "isup_rev": { "txval": rcm_taxable, "iamt": rcm_igst, "camt": rcm_cgst, "samt": rcm_sgst },
                 },
                 "itc_details": {
-                    "itc_avl": { "iamt": rcm_itc, "camt": eligible_itc / 2, "samt": eligible_itc - eligible_itc / 2 },
-                    "itc_rcm": { "iamt": 0, "camt": rcm_itc, "samt": 0 },
+                    "itc_avl": { "iamt": iamt_4a, "camt": camt_4a, "samt": samt_4a },
+                    "itc_rcm": { "iamt": rcm_itc_igst, "camt": rcm_itc_cgst, "samt": rcm_itc_sgst },
                 },
             },
         });
@@ -1590,9 +1789,9 @@ impl TaxCommandHandler {
                 section: "3.1(d)".to_string(),
                 description: Some("Inward supplies liable to reverse charge".to_string()),
                 taxable_value: rcm_taxable,
-                igst_amount: 0,
-                cgst_amount: rcm_output_tax,
-                sgst_amount: 0,
+                igst_amount: rcm_igst,
+                cgst_amount: rcm_cgst,
+                sgst_amount: rcm_sgst,
                 cess_amount: 0,
                 audit: AuditInfo::new(user_id),
             },
@@ -1603,9 +1802,9 @@ impl TaxCommandHandler {
                 section: "4(A)".to_string(),
                 description: Some("Eligible input tax credit".to_string()),
                 taxable_value: 0,
-                igst_amount: 0,
-                cgst_amount: eligible_itc / 2,
-                sgst_amount: eligible_itc - eligible_itc / 2,
+                igst_amount: iamt_4a,
+                cgst_amount: camt_4a,
+                sgst_amount: samt_4a,
                 cess_amount: 0,
                 audit: AuditInfo::new(user_id),
             },
@@ -1616,15 +1815,32 @@ impl TaxCommandHandler {
                 section: "4(B)(2)".to_string(),
                 description: Some("RCM input tax credit".to_string()),
                 taxable_value: 0,
-                igst_amount: 0,
-                cgst_amount: rcm_itc,
-                sgst_amount: 0,
+                igst_amount: rcm_itc_igst,
+                cgst_amount: rcm_itc_cgst,
+                sgst_amount: rcm_itc_sgst,
                 cess_amount: 0,
                 audit: AuditInfo::new(user_id),
             },
         ];
         for line in &lines {
             self.repo.insert_gst_return_line(line).await?;
+        }
+
+        if rcm_itc_capped {
+            // CA review S9 — alert when 4(B)(2) exceeds RCM tax paid.
+            self.publish_event(
+                tid,
+                return_id.to_string(),
+                TaxationEventData::RcmItcClaimCapped {
+                    return_id: return_id.to_string(),
+                    period: cmd.period.clone(),
+                    claimed_itc: rcm_itc_gross,
+                    rcm_tax_paid,
+                    claimed_amount: rcm_itc,
+                    occurred_at: Utc::now(),
+                },
+            )
+            .await?;
         }
 
         self.publish_event(
@@ -2194,6 +2410,55 @@ impl TaxCommandHandler {
             })
     }
 
+    /// CA review B2 — GSTR-1 vs GSTR-3B cross-check: when the counterpart
+    /// return for the period already exists, its outward-supplies section
+    /// (GSTR-1 "4B" / GSTR-3B "3.1(a)") must match our taxable value and
+    /// total tax exactly. Both generators use `net_amount` (credit − debit
+    /// on the supply account) as the tax-exclusive taxable value, so any
+    /// divergence is a computation bug, not a rounding artifact.
+    async fn cross_check_gstr_consistency(
+        &self,
+        tid: Uuid,
+        registration_id: Uuid,
+        period: &str,
+        my_type: GstReturnType,
+        my_section: &str,
+        my_txval: i64,
+        my_tax: i64,
+        other_type: GstReturnType,
+        other_section: &str,
+    ) -> Result<(), TaxError> {
+        let other = self
+            .repo
+            .find_gst_return_for_period(tid, registration_id, other_type, period)
+            .await?;
+        let Some(other) = other else { return Ok(()) };
+        let lines = self
+            .repo
+            .list_gst_return_lines(tid, *other.gst_return_id.as_uuid())
+            .await?;
+        let Some(line) = lines.iter().find(|l| l.section == other_section) else {
+            return Ok(());
+        };
+        let other_txval = line.taxable_value;
+        let other_tax = line.igst_amount + line.cgst_amount + line.sgst_amount;
+        if my_txval != other_txval || my_tax != other_tax {
+            let (g1_tx, g1_tax, g3_tx, g3_tax) = if my_type == GstReturnType::Gstr1 {
+                (my_txval, my_tax, other_txval, other_tax)
+            } else {
+                (other_txval, other_tax, my_txval, my_tax)
+            };
+            return Err(TaxError::GstrConsistencyMismatch {
+                period: period.to_string(),
+                gstr1_txval: g1_tx,
+                gstr3b_txval: g3_tx,
+                gstr1_tax: g1_tax,
+                gstr3b_tax: g3_tax,
+            });
+        }
+        Ok(())
+    }
+
     async fn payment_entity(&self, tenant_id: Uuid, payment_id: Uuid) -> Result<Uuid, TaxError> {
         let row: Option<(Uuid,)> = sqlx::query_as(
             "SELECT entity_id FROM vendor_payments WHERE tenant_id = $1 AND payment_id = $2",
@@ -2289,6 +2554,16 @@ impl TaxCommandHandler {
 
 // ─── Free helpers ─────────────────────────────────────────────────────
 
+/// Whole months between two "MMYYYY" periods (to − from). None when either
+/// string is malformed. Used for the Rule 43 60-month capital-goods horizon.
+fn months_between_periods(from: &str, to: &str) -> Option<i64> {
+    let fm: i64 = from.get(..2)?.parse().ok()?;
+    let fy: i64 = from.get(2..)?.parse().ok()?;
+    let tm: i64 = to.get(..2)?.parse().ok()?;
+    let ty: i64 = to.get(2..)?.parse().ok()?;
+    Some((ty - fy) * 12 + (tm - fm))
+}
+
 /// "072026" → "2026-27" (Indian FY starts April).
 pub(crate) fn period_to_fy(period: &str) -> String {
     if period.len() < 6 {
@@ -2340,20 +2615,30 @@ fn valid_ack(ack: &str) -> bool {
 }
 
 /// Aggregate a vendor invoice's lines into (taxable_value, total_tax,
-/// effective eligibility). The effective eligibility is BLOCKED when ANY
-/// line's account is BLOCKED (s.17(5) is an absolute bar for the whole
-/// invoice's attributable input); otherwise the first non-FULL eligibility
-/// wins (REVERSAL_42/REVERSAL_43/CAPITAL_GOODS), defaulting to FULL.
+/// effective eligibility). CA review S8: eligibility is computed PER LINE —
+/// a BLOCKED (s.17(5)) line's own tax is excluded from the ITC pool, but it
+/// no longer over-denies ITC on the invoice's other (eligible) lines. The
+/// invoice-level eligibility is only BLOCKED when every line is blocked;
+/// otherwise the first non-FULL eligibility wins
+/// (REVERSAL_42/REVERSAL_43/CAPITAL_GOODS), defaulting to FULL.
 fn aggregate_invoice_lines(lines: &[VendorInvoiceLineTaxRow]) -> (i64, i64, ItcEligibility) {
     let mut taxable = 0i64;
     let mut tax = 0i64;
     let mut eligibility = ItcEligibility::Full;
+    let mut any_eligible = false;
     for l in lines {
         let line_tax = l.tax_amount.unwrap_or(0).max(0);
         taxable += (l.total_amount - line_tax).max(0);
+        if matches!(
+            l.itc_eligibility.as_deref().map(str::to_uppercase).as_deref(),
+            Some("BLOCKED")
+        ) {
+            // s.17(5) — exclude this line's tax only; keep the rest.
+            continue;
+        }
+        any_eligible = true;
         tax += line_tax;
         match l.itc_eligibility.as_deref().map(str::to_uppercase).as_deref() {
-            Some("BLOCKED") => eligibility = ItcEligibility::Blocked,
             Some("REVERSAL_42") if eligibility == ItcEligibility::Full => {
                 eligibility = ItcEligibility::Reversal42
             }
@@ -2365,6 +2650,9 @@ fn aggregate_invoice_lines(lines: &[VendorInvoiceLineTaxRow]) -> (i64, i64, ItcE
             }
             _ => {}
         }
+    }
+    if !any_eligible {
+        eligibility = ItcEligibility::Blocked;
     }
     (taxable, tax, eligibility)
 }
