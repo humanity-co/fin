@@ -54,6 +54,17 @@ pub enum TaxationEventData {
         journal_id: String,
         occurred_at: DateTime<Utc>,
     },
+    /// s.16(2)(d) alert — RCM ITC claimed in GSTR-3B 4(B)(2) exceeds the
+    /// RCM tax actually paid to the government in the period; the claim is
+    /// capped at the paid amount until the credit is settled (CA review S9).
+    RcmItcClaimCapped {
+        return_id: String,
+        period: String,
+        claimed_itc: i64,
+        rcm_tax_paid: i64,
+        claimed_amount: i64,
+        occurred_at: DateTime<Utc>,
+    },
     // ── ITC register ────────────────────────────────────────────────
     ItcComputed {
         reg_id: String,
@@ -218,6 +229,7 @@ fn event_type_name(event: &TaxationEventData) -> &'static str {
         TaxationEventData::Gstr3bGenerated { .. } => "Gstr3bGenerated",
         TaxationEventData::GstReturnFiled { .. } => "GstReturnFiled",
         TaxationEventData::RcmEntryCreated { .. } => "RcmEntryCreated",
+        TaxationEventData::RcmItcClaimCapped { .. } => "RcmItcClaimCapped",
         TaxationEventData::ItcComputed { .. } => "ItcComputed",
         TaxationEventData::Rule42ReversalComputed { .. } => "Rule42ReversalComputed",
         TaxationEventData::Rule43ReversalComputed { .. } => "Rule43ReversalComputed",

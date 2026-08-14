@@ -4,7 +4,7 @@
 //! (`deleted_at IS NULL`), fact tables (ITC register lines, GST return
 //! lines, TDS deposits, income-application lines) are INSERT-only.
 //!
-//! Policy values (`itc_reversal_tolerance_percent`, `income_application_threshold`,
+//! Policy values (`itc_reversal_deminimis_paise`, `income_application_threshold`,
 //! `accumulation_years`, `fcra_admin_expense_ratio_limit`, ...) come from
 //! `system_config` (see `004_tax.sql` seeds) — tenant rows override GLOBAL
 //! defaults, mirroring `TreasuryRepository::load_policy`.
@@ -45,9 +45,10 @@ pub const GLOBAL_TENANT: &str = "00000000-0000-0000-0000-000000000000";
 /// GLOBAL default (tenant-first ordering, newest `valid_from` wins).
 #[derive(Debug, Clone)]
 pub struct TaxPolicy {
-    /// Rule 42 de-minimis: no reversal when computed reversal ≤ this % of C2
-    /// (CGST Rules r.42(1)(m)). Statute default 5%.
-    pub itc_reversal_tolerance_percent: i64,
+    /// Rule 42 de-minimis: no reversal when the computed reversal ≤ this
+    /// fixed paise amount per tax period (proviso to CGST Rules r.42(1) —
+    /// ₹5,000 default; CA review DE-MINIMIS).
+    pub itc_reversal_deminimis_paise: i64,
     /// Minimum % of income applied to educational purposes (IT Act s.11(1)(a)).
     pub income_application_threshold: i64,
     /// Max period (years) unapplied income may be accumulated (s.11(2)).
@@ -63,7 +64,9 @@ pub struct TaxPolicy {
 impl Default for TaxPolicy {
     fn default() -> Self {
         Self {
-            itc_reversal_tolerance_percent: 5,
+            // ₹5,000 per tax period — proviso to CGST Rules r.42(1)
+            // (conservative; configurable per tenant).
+            itc_reversal_deminimis_paise: 500_000,
             income_application_threshold: 85,
             accumulation_years: 5,
             fcra_admin_expense_ratio_limit: 20,
@@ -279,6 +282,7 @@ pub(crate) struct ItcRegisterLineRow {
     sgst: Option<i64>,
     total_tax: Option<i64>,
     itc_eligibility: String,
+    acquisition_period: Option<String>,
     reversal_percent: Option<Decimal>,
     reversal_amount: Option<i64>,
     is_reversed: bool,
@@ -301,6 +305,7 @@ impl ItcRegisterLineRow {
             sgst: self.sgst.unwrap_or(0),
             total_tax: self.total_tax.unwrap_or(0),
             itc_eligibility: ItcEligibility::from_db_str(&self.itc_eligibility),
+            acquisition_period: self.acquisition_period,
             reversal_percent: self.reversal_percent,
             reversal_amount: self.reversal_amount,
             is_reversed: self.is_reversed,
@@ -323,6 +328,7 @@ pub(crate) struct TdsSectionRow {
     default_rate: Decimal,
     threshold_per_payment: Option<i64>,
     threshold_aggregate: Option<i64>,
+    threshold_excess_only: bool,
     applicable_to: String,
     is_active: bool,
     effective_from: NaiveDate,
@@ -341,6 +347,7 @@ impl TdsSectionRow {
             default_rate: self.default_rate,
             threshold_per_payment: self.threshold_per_payment,
             threshold_aggregate: self.threshold_aggregate,
+            threshold_excess_only: self.threshold_excess_only,
             applicable_to: TdsSectionApplicableTo::from_db_str(&self.applicable_to),
             is_active: self.is_active,
             effective_from: self.effective_from,
@@ -668,9 +675,9 @@ impl TaxRepository {
                 other => other.to_string(),
             };
             match key.as_str() {
-                "tax.itc_reversal_tolerance_percent" => {
-                    policy.itc_reversal_tolerance_percent =
-                        text.parse().unwrap_or(policy.itc_reversal_tolerance_percent);
+                "tax.itc_reversal_deminimis_paise" => {
+                    policy.itc_reversal_deminimis_paise =
+                        text.parse().unwrap_or(policy.itc_reversal_deminimis_paise);
                 }
                 "tax.income_application_threshold" => {
                     policy.income_application_threshold =
@@ -1168,7 +1175,7 @@ impl TaxRepository {
             r#"
             SELECT itc_register_line_id, tenant_id, itc_register_id, invoice_id, invoice_number,
                    invoice_date, vendor_gstin, taxable_value, igst, cgst, sgst, total_tax,
-                   itc_eligibility, reversal_percent, reversal_amount, is_reversed, created_at
+                   itc_eligibility, acquisition_period, reversal_percent, reversal_amount, is_reversed, created_at
             FROM itc_register_lines
             WHERE tenant_id = $1 AND itc_register_line_id = $2
             "#,
@@ -1189,7 +1196,7 @@ impl TaxRepository {
             r#"
             SELECT itc_register_line_id, tenant_id, itc_register_id, invoice_id, invoice_number,
                    invoice_date, vendor_gstin, taxable_value, igst, cgst, sgst, total_tax,
-                   itc_eligibility, reversal_percent, reversal_amount, is_reversed, created_at
+                   itc_eligibility, acquisition_period, reversal_percent, reversal_amount, is_reversed, created_at
             FROM itc_register_lines
             WHERE tenant_id = $1 AND itc_register_id = $2
             ORDER BY invoice_date, invoice_number
@@ -1208,8 +1215,8 @@ impl TaxRepository {
             INSERT INTO itc_register_lines (
                 itc_register_line_id, tenant_id, itc_register_id, invoice_id, invoice_number,
                 invoice_date, vendor_gstin, taxable_value, igst, cgst, sgst, total_tax,
-                itc_eligibility, reversal_percent, reversal_amount, is_reversed
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+                itc_eligibility, acquisition_period, reversal_percent, reversal_amount, is_reversed
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
             "#,
         )
         .bind(l.itc_register_line_id.as_uuid())
@@ -1225,6 +1232,7 @@ impl TaxRepository {
         .bind(l.sgst)
         .bind(l.total_tax)
         .bind(l.itc_eligibility.to_db_str())
+        .bind(&l.acquisition_period)
         .bind(l.reversal_percent)
         .bind(l.reversal_amount)
         .bind(l.is_reversed)
@@ -1398,7 +1406,8 @@ impl TaxRepository {
         let row = sqlx::query_as::<_, TdsSectionRow>(
             r#"
             SELECT tds_section_id, tenant_id, section_code, description, default_rate,
-                   threshold_per_payment, threshold_aggregate, applicable_to, is_active,
+                   threshold_per_payment, threshold_aggregate, threshold_excess_only,
+                   applicable_to, is_active,
                    effective_from, effective_to, created_at, updated_at
             FROM tds_sections
             WHERE tenant_id IN ($1, $2)
@@ -1426,7 +1435,8 @@ impl TaxRepository {
         let rows = sqlx::query_as::<_, TdsSectionRow>(
             r#"
             SELECT tds_section_id, tenant_id, section_code, description, default_rate,
-                   threshold_per_payment, threshold_aggregate, applicable_to, is_active,
+                   threshold_per_payment, threshold_aggregate, threshold_excess_only,
+                   applicable_to, is_active,
                    effective_from, effective_to, created_at, updated_at
             FROM tds_sections
             WHERE tenant_id IN ($1, $2)
@@ -2127,6 +2137,47 @@ impl TaxRepository {
         .fetch_optional(&self.pool)
         .await?;
         Ok(prefixed)
+    }
+
+    /// Resolve the TDS Payable GL leaf per section (`24.03.<section>`) for
+    /// a challan deposit (CA review S7). Resolution order per section:
+    /// exact leaf `24.03.<section>` → deeper leaf `24.03.<section>.*` →
+    /// the `24.03` parent (charts that only keep the parent). Sections with
+    /// no resolvable account are simply absent from the result and the
+    /// command errors.
+    pub async fn find_tds_payable_accounts(
+        &self,
+        tenant_id: Uuid,
+        sections: &[String],
+    ) -> Result<std::collections::BTreeMap<String, Uuid>, TaxError> {
+        let mut resolved = std::collections::BTreeMap::new();
+        if sections.is_empty() {
+            return Ok(resolved);
+        }
+        let rows: Vec<(String, Uuid)> = sqlx::query_as(
+            r#"
+            SELECT account_code, account_id FROM chart_of_accounts
+            WHERE tenant_id = $1 AND account_code LIKE '24.03%'
+              AND deleted_at IS NULL AND is_active = TRUE
+            "#,
+        )
+        .bind(tenant_id)
+        .fetch_all(&self.pool)
+        .await?;
+        for section in sections {
+            let exact = format!("24.03.{section}");
+            let deeper = format!("{exact}.");
+            let account_id = rows
+                .iter()
+                .find(|(c, _)| c == &exact)
+                .map(|(_, id)| *id)
+                .or_else(|| rows.iter().find(|(c, _)| c.starts_with(&deeper)).map(|(_, id)| *id))
+                .or_else(|| rows.iter().find(|(c, _)| c == "24.03").map(|(_, id)| *id));
+            if let Some(id) = account_id {
+                resolved.insert(section.clone(), id);
+            }
+        }
+        Ok(resolved)
     }
 
     /// The ITC Recoverable account that RCM ITC posts to: prefer an 11.01

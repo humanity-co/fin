@@ -68,6 +68,15 @@ pub enum TaxError {
     #[error("GSTR-3B inconsistency: 3.1(d) RCM output ({rcm_output}) does not match 4(B)(2) RCM ITC ({rcm_itc})")]
     Gstr3bRcmMismatch { rcm_output: i64, rcm_itc: i64 },
 
+    #[error("GSTR-1 vs GSTR-3B cross-check failed: outward taxable value differs (GSTR-1 {gstr1_txval} vs GSTR-3B 3.1(a) {gstr3b_txval}) — both returns must use the same tax-exclusive `net_amount` convention")]
+    GstrConsistencyMismatch {
+        period: String,
+        gstr1_txval: i64,
+        gstr3b_txval: i64,
+        gstr1_tax: i64,
+        gstr3b_tax: i64,
+    },
+
     #[error("section {0} is not valid for return type {1}")]
     InvalidReturnSection(String, String),
 
