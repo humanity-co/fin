@@ -31,7 +31,7 @@ use sutra_finance_gl::{CreateJournalCmd, CreateJournalLineCmd, GlCommandHandler,
 
 use crate::errors::TaxError;
 use crate::events::{write_outbox, TaxationEventData};
-use crate::models::gst::{GstFilingFrequency, GstRate, GstRegistration, GstSupplyType};
+use crate::models::gst::{GstFilingFrequency, GstRate, GstRegistration, GstRegistrationType, GstSupplyType};
 use crate::models::gst_return::{GstReturn, GstReturnLine, GstReturnStatus, GstReturnType};
 use crate::models::income::{
     FcraRegistration, FcraStatus, IncomeApplication, IncomeApplicationCategory,

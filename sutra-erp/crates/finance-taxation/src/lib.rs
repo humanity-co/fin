@@ -64,5 +64,3 @@ pub use queries::{
     GstLiabilitySummaryRow, IncomeApplicationView, ItcSummaryRow, TaxQueryHandler, TdsRegisterRow,
 };
 pub use repository::{TaxPolicy, TaxRepository, TdsDeductionRow, TdsRegisterBalanceRow};
-/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
-/home/agent-lead/.profile: line 29: /tmp/cargo/env: No such file or directory
