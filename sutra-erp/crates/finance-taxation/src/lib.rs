@@ -51,13 +51,18 @@ pub use models::{
 };
 pub use commands::{
     ComputeFcraComplianceCmd, ComputeIncomeApplicationCmd, ComputeItcCmd,
-    ComputeRule42ReversalCmd, ComputeRule43ReversalCmd, CreateRcmEntryCmd,
-    DepositTdsToGovtCmd, FlagNonCompliantInvestmentsCmd, GenerateGstrCmd,
-    IncomeApplicationLineCmd, RecordGstFilingCmd, RegisterFcraCmd, RegisterTrustExemptionCmd,
-    RenewExemptionCmd, ReverseItcCmd, TaxCommandHandler, TdsComputation, TdsComputationInput,
-    TdsComputationService, TdsThresholdStatus,
+    ComputeRule42ReversalCmd, ComputeRule43ReversalCmd, ConfigureTdsSectionCmd,
+    CreateRcmEntryCmd, DepositTdsToGovtCmd, FileTdsReturnCmd,
+    FlagNonCompliantInvestmentsCmd, GenerateForm16ACmd, GenerateForm16Cmd,
+    GenerateGstr9Cmd, GenerateGstr9cCmd, GenerateGstrCmd, GenerateTdsReturnCmd,
+    IncomeApplicationLineCmd, RecordGstFilingCmd, RegisterFcraCmd, RegisterGstinCmd,
+    RegisterTrustExemptionCmd, RenewExemptionCmd, ReverseItcCmd, TaxCommandHandler,
+    TdsComputation, TdsComputationInput, TdsComputationService, TdsThresholdStatus,
+    UpsertGstRateCmd,
 };
 pub use queries::{
     GstLiabilitySummaryRow, IncomeApplicationView, ItcSummaryRow, TaxQueryHandler, TdsRegisterRow,
 };
 pub use repository::{TaxPolicy, TaxRepository, TdsDeductionRow, TdsRegisterBalanceRow};
+/home/agent-lead/.profile: line 28: /home/agent-lead/.cargo/env: No such file or directory
+/home/agent-lead/.profile: line 29: /tmp/cargo/env: No such file or directory

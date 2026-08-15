@@ -31,7 +31,7 @@ use sutra_finance_gl::{CreateJournalCmd, CreateJournalLineCmd, GlCommandHandler,
 
 use crate::errors::TaxError;
 use crate::events::{write_outbox, TaxationEventData};
-use crate::models::gst::{GstFilingFrequency, GstRegistration};
+use crate::models::gst::{GstFilingFrequency, GstRate, GstRegistration, GstSupplyType};
 use crate::models::gst_return::{GstReturn, GstReturnLine, GstReturnStatus, GstReturnType};
 use crate::models::income::{
     FcraRegistration, FcraStatus, IncomeApplication, IncomeApplicationCategory,
@@ -39,7 +39,11 @@ use crate::models::income::{
     TrustExemptionStatus,
 };
 use crate::models::itc::{ItcEligibility, ItcRegister, ItcRegisterLine, ItcRegisterStatus};
-use crate::models::tds::{TdsDeposit, TdsDepositStatus, TdsSection};
+use crate::models::tds::{
+    Form16Certificate, Form16CertificateStatus, Form16CertificateType, TdsDeposit,
+    TdsDepositStatus, TdsReturn, TdsReturnDetail, TdsReturnStatus, TdsReturnType, TdsSection,
+    TdsSectionApplicableTo,
+};
 use crate::repository::{TaxRepository, VendorInvoiceLineTaxRow};
 
 // ─── Command payloads ─────────────────────────────────────────────────
@@ -174,6 +178,108 @@ pub struct ComputeFcraComplianceCmd {
     pub fiscal_year_id: Uuid,
     pub total_receipts: i64,
     pub admin_expenses: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterGstinCmd {
+    /// Campus/entity the GSTIN belongs to (one registration per entity).
+    pub entity_id: Uuid,
+    /// 15-char GSTIN (2 state + 10 PAN + entity + check + Z).
+    pub gstin: String,
+    pub trade_name: String,
+    pub legal_name: String,
+    pub registration_type: GstRegistrationType,
+    pub filing_frequency: GstFilingFrequency,
+    pub is_composite: bool,
+    pub address_line1: Option<String>,
+    pub address_line2: Option<String>,
+    pub city: Option<String>,
+    pub state: Option<String>,
+    pub pincode: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpsertGstRateCmd {
+    /// HSN (goods) / SAC (services) code.
+    pub hsn_sac_code: String,
+    pub description: Option<String>,
+    /// GST rate as a whole percent — must be one of 0, 5, 12, 18, 28.
+    pub rate: i64,
+    pub itc_eligible: bool,
+    pub effective_from: NaiveDate,
+    /// `None` = open-ended. Overlapping effective ranges per
+    /// (tenant, hsn_sac, supply_type) are rejected.
+    pub effective_to: Option<NaiveDate>,
+    pub supply_type: GstSupplyType,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigureTdsSectionCmd {
+    /// e.g. "194C", "194J", "192" (salary).
+    pub section_code: String,
+    /// Effective rate (percent, e.g. 1.00 = 1%). Must be within the
+    /// Finance Act band (0 < rate <= 30).
+    pub default_rate: Decimal,
+    /// Threshold per single payment (paise).
+    pub threshold_per_payment: Option<i64>,
+    /// Threshold on aggregate payments in the FY (paise).
+    pub threshold_aggregate: Option<i64>,
+    /// s.194Q-style: TDS on the excess over the FY-aggregate threshold.
+    pub threshold_excess_only: bool,
+    /// `None` = keep the current row's applicable_to (or ALL on insert).
+    pub applicable_to: Option<TdsSectionApplicableTo>,
+    /// `None` = today. The effective start of this configuration.
+    pub effective_from: Option<NaiveDate>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerateTdsReturnCmd {
+    pub entity_id: Uuid,
+    pub return_type: TdsReturnType,
+    /// "Q1".."Q4".
+    pub quarter: String,
+    /// e.g. "2026-27".
+    pub fiscal_year: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileTdsReturnCmd {
+    pub return_id: Uuid,
+    pub acknowledgment_no: String,
+    pub filed_date: NaiveDate,
+    /// `true` → the GSTN/TRACES portal rejected the return; the state
+    /// machine moves to FILED_WITH_ERRORS (spec error path).
+    pub filed_with_errors: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerateForm16Cmd {
+    /// Employee (modelled as a vendor-master row with a PAN) — Form 16 is
+    /// per employee per FY.
+    pub employee_id: Uuid,
+    pub fiscal_year: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerateForm16ACmd {
+    pub vendor_id: Uuid,
+    pub fiscal_year: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerateGstr9Cmd {
+    pub gst_registration_id: Uuid,
+    /// e.g. "2026-27" — the annual return's period.
+    pub fiscal_year: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerateGstr9cCmd {
+    pub gst_registration_id: Uuid,
+    pub fiscal_year: String,
+    /// Turnover as per audited books (paise). `None` → derived from the GL
+    /// (posted journal aggregates over the FY).
+    pub audited_turnover: Option<i64>,
 }
 
 // ─── TDS computation service ──────────────────────────────────────────
@@ -2383,6 +2489,1027 @@ impl TaxCommandHandler {
             .unwrap())
     }
 
+    // ── GST registration & rate master (Phase 3a) ──────────────────
+
+    /// Register a GST registration for an entity (spec `RegisterGstin`).
+    ///
+    /// Validations: GSTIN format (15 chars — 2 state + 10 PAN + entity +
+    /// check + Z) → `InvalidGstin`; unique GSTIN per tenant →
+    /// `DuplicateGstin`; one registration per entity (base DDL
+    /// `UNIQUE(entity_id)`); the GSTIN's state code must match the
+    /// entity's registered state, resolved through the configurable
+    /// `tax.state_code_map` (state name → 2-digit code; entities whose
+    /// state has no mapping are not checked). Lifecycle: ACTIVE
+    /// (`is_active = true`); no hard delete (soft-delete only).
+    pub async fn register_gstin(
+        &self,
+        tenant_id: TenantId,
+        user_id: Uuid,
+        cmd: RegisterGstinCmd,
+    ) -> Result<GstRegistration, TaxError> {
+        let tid = *tenant_id.as_uuid();
+        let gstin = cmd.gstin.trim().to_uppercase();
+        if !valid_gstin(&gstin) {
+            return Err(TaxError::InvalidGstin(gstin));
+        }
+        if self
+            .repo
+            .find_gst_registration_by_entity(tid, cmd.entity_id)
+            .await?
+            .is_some()
+        {
+            return Err(TaxError::InvalidInput(format!(
+                "entity {} already has a GST registration — one GSTIN per entity",
+                cmd.entity_id
+            )));
+        }
+        let existing = self.repo.list_gst_registrations(tid, None).await?;
+        if existing.iter().any(|r| r.gstin.eq_ignore_ascii_case(&gstin)) {
+            return Err(TaxError::DuplicateGstin(gstin.clone()));
+        }
+        // GSTIN state code vs entity registered state (config-driven map).
+        let policy = self.repo.load_policy(tid).await?;
+        let gstin_state = gstin.get(..2).unwrap_or("").to_string();
+        if let Some(entity_state) = self.repo.entity_state(tid, cmd.entity_id).await? {
+            if let Some((_, code)) = policy
+                .state_code_map
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(&entity_state))
+            {
+                if code != &gstin_state {
+                    return Err(TaxError::GstStateCodeMismatch {
+                        expected: code.clone(),
+                        actual: gstin_state,
+                    });
+                }
+            }
+        }
+
+        let registration = GstRegistration {
+            gst_registration_id: EntityId::new(),
+            tenant_id,
+            entity_id: cmd.entity_id,
+            gstin: gstin.clone(),
+            trade_name: cmd.trade_name.trim().to_string(),
+            legal_name: cmd.legal_name.trim().to_string(),
+            registration_type: cmd.registration_type,
+            filing_frequency: cmd.filing_frequency,
+            is_composite: cmd.is_composite,
+            state_code: gstin_state.clone(),
+            address_line1: cmd.address_line1.clone(),
+            address_line2: cmd.address_line2.clone(),
+            city: cmd.city.clone(),
+            state: cmd.state.clone(),
+            pincode: cmd.pincode.clone(),
+            is_active: true,
+            audit: AuditInfo::new(user_id),
+        };
+        let reg_id = *registration.gst_registration_id.as_uuid();
+        // Map a concurrent unique-violation on (tenant, gstin)/(entity_id)
+        // to the domain error.
+        if let Err(TaxError::Database(sqlx::Error::Database(db))) =
+            self.repo.insert_gst_registration(&registration).await
+        {
+            if db.is_unique_violation() {
+                return Err(TaxError::DuplicateGstin(gstin));
+            }
+            return Err(TaxError::Database(sqlx::Error::Database(db)));
+        }
+
+        self.publish_event(
+            tid,
+            reg_id.to_string(),
+            TaxationEventData::GstinRegistered {
+                reg_id: reg_id.to_string(),
+                entity_id: cmd.entity_id.to_string(),
+                gstin,
+                occurred_at: Utc::now(),
+            },
+        )
+        .await?;
+        info!(tenant_id = %tid, reg_id = %reg_id, gstin = %registration.gstin, "GST registration created");
+        Ok(registration)
+    }
+
+    /// Upsert a rate into the effective-dated GST rate master (spec
+    /// `UpsertGstRate`).
+    ///
+    /// Rate must be one of {0, 5, 12, 18, 28} (`InvalidGstRate`); the same
+    /// (tenant, hsn_sac, supply_type, effective_from) row is updated in
+    /// place, otherwise a new row is inserted; overlapping effective ranges
+    /// are rejected pre-flight (`GstRateOverlap`) and by the DB EXCLUDE
+    /// constraint (migration 004). Emits `GstRateUpdated`.
+    pub async fn upsert_gst_rate(
+        &self,
+        tenant_id: TenantId,
+        user_id: Uuid,
+        cmd: UpsertGstRateCmd,
+    ) -> Result<GstRate, TaxError> {
+        let tid = *tenant_id.as_uuid();
+        if !matches!(cmd.rate, 0 | 5 | 12 | 18 | 28) {
+            return Err(TaxError::InvalidGstRate(cmd.rate));
+        }
+        if cmd.effective_to.is_some_and(|to| to <= cmd.effective_from) {
+            return Err(TaxError::InvalidInput(
+                "effective_to must be after effective_from".to_string(),
+            ));
+        }
+        let hsn = cmd.hsn_sac_code.trim().to_uppercase();
+        if hsn.is_empty() {
+            return Err(TaxError::InvalidInput("hsn_sac_code required".to_string()));
+        }
+        let existing = self
+            .repo
+            .list_gst_rates(tid, &hsn, Some(cmd.supply_type))
+            .await?;
+        // Overlap check ([from, to) half-open ranges; open-ended = +inf).
+        for r in &existing {
+            if r.effective_from == cmd.effective_from {
+                continue; // handled by the upsert-update path below
+            }
+            let r_end = r.effective_to.unwrap_or(NaiveDate::MAX);
+            let new_end = cmd.effective_to.unwrap_or(NaiveDate::MAX);
+            if cmd.effective_from < r_end && r.effective_from < new_end {
+                return Err(TaxError::GstRateOverlap {
+                    hsn_sac_code: hsn.clone(),
+                    supply_type: cmd.supply_type.to_db_str().to_string(),
+                    existing_from: r.effective_from.to_string(),
+                    existing_to: r
+                        .effective_to
+                        .map(|d| d.to_string())
+                        .unwrap_or_else(|| "open-ended".to_string()),
+                });
+            }
+        }
+
+        let rate_row = match existing
+            .iter()
+            .find(|r| r.effective_from == cmd.effective_from)
+            .cloned()
+        {
+            Some(r) => {
+                self.repo
+                    .update_gst_rate(
+                        tid,
+                        *r.gst_rate_id.as_uuid(),
+                        cmd.description.as_deref(),
+                        cmd.rate,
+                        cmd.itc_eligible,
+                        cmd.effective_to,
+                        true,
+                        user_id,
+                    )
+                    .await?;
+                GstRate {
+                    gst_rate_id: r.gst_rate_id,
+                    description: cmd.description.clone(),
+                    rate: cmd.rate,
+                    itc_eligible: cmd.itc_eligible,
+                    effective_to: cmd.effective_to,
+                    is_active: true,
+                    ..r
+                }
+            }
+            None => {
+                let created = GstRate {
+                    gst_rate_id: EntityId::new(),
+                    tenant_id,
+                    hsn_sac_code: hsn.clone(),
+                    description: cmd.description.clone(),
+                    rate: cmd.rate,
+                    itc_eligible: cmd.itc_eligible,
+                    effective_from: cmd.effective_from,
+                    effective_to: cmd.effective_to,
+                    supply_type: cmd.supply_type,
+                    is_active: true,
+                    audit: AuditInfo::new(user_id),
+                };
+                self.repo.insert_gst_rate(&created).await?;
+                created
+            }
+        };
+
+        self.publish_event(
+            tid,
+            hsn.clone(),
+            TaxationEventData::GstRateUpdated {
+                hsn_sac_code: hsn,
+                rate: cmd.rate,
+                effective_from: cmd.effective_from.to_string(),
+                occurred_at: Utc::now(),
+            },
+        )
+        .await?;
+        info!(tenant_id = %tid, hsn = %rate_row.hsn_sac_code, rate = %cmd.rate, "GST rate upserted");
+        Ok(rate_row)
+    }
+
+    // ── TDS configuration ───────────────────────────────────────────
+
+    /// Configure a TDS section (spec `ConfigureTdsSection` — PUT-style).
+    ///
+    /// Rate must be within the Finance Act band (0 < rate <= 30) and
+    /// thresholds must be >= 0. When the currently-effective row is a
+    /// tenant row it is updated in place; otherwise a tenant-specific row
+    /// is inserted (effective-dated per the model), so tenant configuration
+    /// never mutates the GLOBAL default. Emits `TdsSectionUpdated`.
+    pub async fn configure_tds_section(
+        &self,
+        tenant_id: TenantId,
+        user_id: Uuid,
+        cmd: ConfigureTdsSectionCmd,
+    ) -> Result<TdsSection, TaxError> {
+        let tid = *tenant_id.as_uuid();
+        let code = cmd.section_code.trim().to_uppercase();
+        if code.is_empty() {
+            return Err(TaxError::InvalidInput("section_code required".to_string()));
+        }
+        // Finance Act bands: no section exceeds 30% (top slab); 194Q is 0.1%.
+        if cmd.default_rate <= Decimal::ZERO || cmd.default_rate > Decimal::from(30) {
+            return Err(TaxError::TdsRateOutOfBand {
+                section_code: code.clone(),
+                rate: cmd.default_rate.to_string(),
+            });
+        }
+        if cmd.threshold_per_payment.is_some_and(|t| t < 0)
+            || cmd.threshold_aggregate.is_some_and(|t| t < 0)
+        {
+            return Err(TaxError::TdsThresholdNegative);
+        }
+        let today = Utc::now().date_naive();
+        let current = self.repo.find_tds_section(tid, &code, today).await?;
+
+        let section = match &current {
+            Some(s) if *s.tenant_id.as_uuid() == tid => {
+                self.repo
+                    .update_tds_section(
+                        tid,
+                        *s.tds_section_id.as_uuid(),
+                        cmd.default_rate,
+                        cmd.threshold_per_payment,
+                        cmd.threshold_aggregate,
+                        cmd.threshold_excess_only,
+                        cmd.applicable_to.unwrap_or(s.applicable_to),
+                        user_id,
+                    )
+                    .await?;
+                self.repo
+                    .find_tds_section(tid, &code, today)
+                    .await?
+                    .ok_or_else(|| TaxError::TdsSectionNotFound(code.clone(), today.to_string()))?
+            }
+            _ => {
+                let created = TdsSection {
+                    tds_section_id: EntityId::new(),
+                    tenant_id,
+                    section_code: code.clone(),
+                    description: current
+                        .as_ref()
+                        .map(|c| c.description.clone())
+                        .unwrap_or_default(),
+                    default_rate: cmd.default_rate,
+                    threshold_per_payment: cmd.threshold_per_payment,
+                    threshold_aggregate: cmd.threshold_aggregate,
+                    threshold_excess_only: cmd.threshold_excess_only,
+                    applicable_to: cmd.applicable_to.unwrap_or(TdsSectionApplicableTo::All),
+                    is_active: true,
+                    effective_from: cmd.effective_from.unwrap_or(today),
+                    effective_to: None,
+                    audit: AuditInfo::new(user_id),
+                };
+                self.repo.insert_tds_section(&created).await?;
+                created
+            }
+        };
+
+        self.publish_event(
+            tid,
+            code.clone(),
+            TaxationEventData::TdsSectionUpdated {
+                section_code: code,
+                rate: cmd.default_rate.to_string(),
+                threshold: cmd.threshold_aggregate.or(cmd.threshold_per_payment),
+                occurred_at: Utc::now(),
+            },
+        )
+        .await?;
+        info!(tenant_id = %tid, section = %section.section_code, rate = %cmd.default_rate, "TDS section configured");
+        Ok(section)
+    }
+
+    // ── TDS returns (24Q / 26Q / 27Q) ───────────────────────────────
+
+    /// Generate a TDS return for a quarter+FY (spec `GenerateTdsReturn`).
+    ///
+    /// Aggregates deductions with `deposit_status = DEPOSITED` whose challan
+    /// deposit falls in the quarter, scoped to the entity and filtered by
+    /// the return type's section set (24Q = salary section from
+    /// `tax.salary_tds_section`, 27Q = NON_RESIDENT sections, 26Q = all
+    /// others). DRAFT → GENERATED. The (entity, type, quarter, fy) natural
+    /// key is the idempotency key (`DuplicateTdsReturn`). No deductions →
+    /// `TdsReturnNotGeneratable`. Emits `TdsReturnGenerated`.
+    pub async fn generate_tds_return(
+        &self,
+        tenant_id: TenantId,
+        user_id: Uuid,
+        cmd: GenerateTdsReturnCmd,
+    ) -> Result<TdsReturn, TaxError> {
+        let tid = *tenant_id.as_uuid();
+        if !matches!(cmd.quarter.as_str(), "Q1" | "Q2" | "Q3" | "Q4") {
+            return Err(TaxError::InvalidInput(format!(
+                "invalid quarter {} — expected Q1..Q4",
+                cmd.quarter
+            )));
+        }
+        let fy_start = fy_start_year(&cmd.fiscal_year);
+        if fy_start <= 0 {
+            return Err(TaxError::InvalidInput(format!(
+                "invalid fiscal_year {}",
+                cmd.fiscal_year
+            )));
+        }
+        let (q_start, q_end) = quarter_range(&cmd.quarter, fy_start).ok_or_else(|| {
+            TaxError::InvalidInput(format!("invalid quarter {}", cmd.quarter))
+        })?;
+        if self
+            .repo
+            .find_tds_return_by_key(
+                tid,
+                cmd.entity_id,
+                cmd.return_type,
+                &cmd.quarter,
+                &cmd.fiscal_year,
+            )
+            .await?
+            .is_some()
+        {
+            return Err(TaxError::DuplicateTdsReturn {
+                entity_id: cmd.entity_id.to_string(),
+                return_type: cmd.return_type.to_db_str().to_string(),
+                quarter: cmd.quarter.clone(),
+                fiscal_year: cmd.fiscal_year.clone(),
+            });
+        }
+        let policy = self.repo.load_policy(tid).await?;
+        let deductions = self
+            .repo
+            .tds_deductions_for_return(
+                tid,
+                cmd.entity_id,
+                cmd.return_type,
+                &policy.salary_tds_section,
+                q_start,
+                q_end,
+            )
+            .await?;
+        if deductions.is_empty() {
+            return Err(TaxError::TdsReturnNotGeneratable(cmd.quarter.clone()));
+        }
+
+        let total_deductions: i64 = deductions.iter().map(|d| d.tds_amount).sum();
+        let total_deposits = total_deductions; // every covered deduction is DEPOSITED
+        let details: Vec<TdsReturnDetail> = deductions
+            .iter()
+            .map(|d| TdsReturnDetail {
+                tds_return_detail_id: EntityId::new(),
+                tenant_id,
+                tds_return_id: Uuid::nil(), // set after the return insert
+                vendor_id: d.vendor_id,
+                employee_id: None,
+                pan: d.pan.clone(),
+                section: d.section.clone(),
+                payment_date: d.payment_date,
+                payment_amount: d.payment_amount,
+                tds_rate: d.tds_rate,
+                tds_amount: d.tds_amount,
+                surcharge: 0,
+                cess: 0,
+                total_tds: d.tds_amount,
+                challan_details: Some(serde_json::json!({
+                    "challan_reference": d.challan_reference,
+                    "deposit_date": d.deposit_date,
+                })),
+                // 24Q rows require salary_month (TRACES); derived from the
+                // payment date (documented assumption — `tds_deductions`
+                // does not carry the month).
+                salary_month: if cmd.return_type == TdsReturnType::Form24q {
+                    Some(d.payment_date.month() as i32)
+                } else {
+                    None
+                },
+                audit: AuditInfo::new(user_id),
+            })
+            .collect();
+
+        let json_data = serde_json::json!({
+            "return_type": cmd.return_type.to_db_str(),
+            "quarter": cmd.quarter,
+            "fiscal_year": cmd.fiscal_year,
+            "total_deductions": total_deductions,
+            "total_deposits": total_deposits,
+            "deductions": details.iter().map(|d| serde_json::json!({
+                "pan": d.pan, "section": d.section, "payment_date": d.payment_date,
+                "payment_amount": d.payment_amount, "tds_amount": d.tds_amount,
+                "salary_month": d.salary_month,
+            })).collect::<Vec<_>>(),
+        });
+
+        let ret = TdsReturn {
+            tds_return_id: EntityId::new(),
+            tenant_id,
+            entity_id: cmd.entity_id,
+            return_type: cmd.return_type,
+            quarter: cmd.quarter.clone(),
+            fiscal_year: cmd.fiscal_year.clone(),
+            status: TdsReturnStatus::Generated,
+            due_date: tds_return_due_date(&cmd.quarter, fy_start),
+            filed_date: None,
+            acknowledgment_no: None,
+            total_deductions,
+            total_deposits,
+            json_data: Some(json_data),
+            audit: AuditInfo::new(user_id),
+        };
+        let return_id = *ret.tds_return_id.as_uuid();
+        self.repo.insert_tds_return(&ret).await?;
+        for mut d in details {
+            d.tds_return_id = return_id;
+            self.repo.insert_tds_return_detail(&d).await?;
+        }
+
+        self.publish_event(
+            tid,
+            return_id.to_string(),
+            TaxationEventData::TdsReturnGenerated {
+                return_id: return_id.to_string(),
+                return_type: ret.return_type.to_db_str().to_string(),
+                quarter: ret.quarter.clone(),
+                fiscal_year: ret.fiscal_year.clone(),
+                total_deductions,
+                occurred_at: Utc::now(),
+            },
+        )
+        .await?;
+        info!(tenant_id = %tid, return_id = %return_id, ty = %ret.return_type.to_db_str(), quarter = %ret.quarter, deductions = %total_deductions, "TDS return generated");
+        Ok(ret)
+    }
+
+    /// File a generated TDS return (spec `FileTdsReturn`).
+    ///
+    /// GENERATED → FILED with an acknowledgment number; when
+    /// `filed_with_errors` is set the state moves to FILED_WITH_ERRORS (the
+    /// spec's error path). The covered deductions' deposit leg advances
+    /// DEPOSITED → FILED and their `tds_deposits` rows mirror the state
+    /// (deduction state machine per spec). Emits `TdsReturnFiled`.
+    pub async fn file_tds_return(
+        &self,
+        tenant_id: TenantId,
+        user_id: Uuid,
+        cmd: FileTdsReturnCmd,
+    ) -> Result<TdsReturn, TaxError> {
+        let tid = *tenant_id.as_uuid();
+        let ack = cmd.acknowledgment_no.trim().to_string();
+        if !valid_ack(&ack) {
+            return Err(TaxError::InvalidAcknowledgmentNo(ack));
+        }
+        let ret = self
+            .repo
+            .find_tds_return(tid, cmd.return_id)
+            .await?
+            .ok_or_else(|| TaxError::TdsReturnNotFound(cmd.return_id.to_string()))?;
+        if ret.status != TdsReturnStatus::Generated {
+            return Err(TaxError::TdsReturnStateViolation {
+                current: ret.status.to_db_str().to_string(),
+                expected: "GENERATED".to_string(),
+            });
+        }
+        let new_status = if cmd.filed_with_errors.unwrap_or(false) {
+            TdsReturnStatus::FiledWithErrors
+        } else {
+            TdsReturnStatus::Filed
+        };
+        self.repo
+            .update_tds_return_filed(tid, cmd.return_id, new_status, &ack, cmd.filed_date, user_id)
+            .await?;
+
+        // Advance the deductions covered by this return: DEPOSITED → FILED.
+        let policy = self.repo.load_policy(tid).await?;
+        let fy_start = fy_start_year(&ret.fiscal_year);
+        let (q_start, q_end) = quarter_range(&ret.quarter, fy_start).ok_or_else(|| {
+            TaxError::Internal(format!("stored return {} has invalid quarter {}", cmd.return_id, ret.quarter))
+        })?;
+        let covered = self
+            .repo
+            .tds_deductions_for_return(
+                tid,
+                ret.entity_id,
+                ret.return_type,
+                &policy.salary_tds_section,
+                q_start,
+                q_end,
+            )
+            .await?;
+        let ids: Vec<Uuid> = covered.iter().map(|d| d.tds_deduction_id).collect();
+        self.repo
+            .mark_deductions_filed(tid, &ids, cmd.filed_date, user_id)
+            .await?;
+
+        self.publish_event(
+            tid,
+            cmd.return_id.to_string(),
+            TaxationEventData::TdsReturnFiled {
+                return_id: cmd.return_id.to_string(),
+                acknowledgment_no: ack,
+                occurred_at: Utc::now(),
+            },
+        )
+        .await?;
+        info!(tenant_id = %tid, return_id = %cmd.return_id, status = %new_status.to_db_str(), "TDS return filed");
+        self.repo
+            .find_tds_return(tid, cmd.return_id)
+            .await?
+            .ok_or_else(|| TaxError::TdsReturnNotFound(cmd.return_id.to_string()))
+    }
+
+    // ── Form 16 / Form 16A ──────────────────────────────────────────
+
+    /// Generate a Form 16 certificate (salary TDS — per employee per FY).
+    ///
+    /// Source: the employee's 24Q deductions (salary section per
+    /// `tax.salary_tds_section`) with a payment in the FY. "All months'
+    /// data complete" is verified as 12 distinct payment months in the FY
+    /// (`Form16DataIncomplete` otherwise — salary_month is derived from the
+    /// payment date, documented assumption). One certificate per
+    /// (tenant, FY, employee) — `DuplicateCertificate`. Emits
+    /// `Form16Generated`.
+    pub async fn generate_form16(
+        &self,
+        tenant_id: TenantId,
+        user_id: Uuid,
+        cmd: GenerateForm16Cmd,
+    ) -> Result<Form16Certificate, TaxError> {
+        let tid = *tenant_id.as_uuid();
+        if self
+            .repo
+            .find_form16_certificate(
+                tid,
+                Form16CertificateType::Form16,
+                Some(cmd.employee_id),
+                None,
+                &cmd.fiscal_year,
+            )
+            .await?
+            .is_some()
+        {
+            return Err(TaxError::DuplicateCertificate {
+                subject: cmd.employee_id.to_string(),
+                fiscal_year: cmd.fiscal_year.clone(),
+            });
+        }
+        let pan = self
+            .repo
+            .vendor_pan(tid, cmd.employee_id)
+            .await?
+            .ok_or_else(|| {
+                TaxError::InvalidInput(format!(
+                    "employee {} not found in the vendor master — Form 16 requires a PAN-linked employee/vendor row",
+                    cmd.employee_id
+                ))
+            })?;
+        let (fy_start, fy_end) = fy_date_range(&cmd.fiscal_year);
+        let policy = self.repo.load_policy(tid).await?;
+        let deductions = self
+            .repo
+            .tds_deductions_for_pan(tid, &pan, fy_start, fy_end, None)
+            .await?
+            .into_iter()
+            .filter(|d| d.section == policy.salary_tds_section)
+            .collect::<Vec<_>>();
+        if deductions.is_empty() {
+            return Err(TaxError::Form16DataIncomplete(cmd.fiscal_year.clone()));
+        }
+        let months: std::collections::BTreeSet<i32> = deductions
+            .iter()
+            .map(|d| d.payment_date.month() as i32)
+            .collect();
+        if months.len() != 12 {
+            return Err(TaxError::Form16DataIncomplete(cmd.fiscal_year.clone()));
+        }
+        let entity_id = deductions[0].entity_id;
+        let document_url = cert_document_url("form16", &cmd.employee_id, &cmd.fiscal_year);
+        let cert = Form16Certificate {
+            form16_certificate_id: EntityId::new(),
+            tenant_id,
+            entity_id,
+            certificate_type: Form16CertificateType::Form16,
+            fiscal_year: cmd.fiscal_year.clone(),
+            employee_id: Some(cmd.employee_id),
+            vendor_id: None,
+            pan,
+            document_url: document_url.clone(),
+            status: Form16CertificateStatus::Generated,
+            generated_by_id: Some(user_id),
+            issued_at: None,
+            audit: AuditInfo::new(user_id),
+        };
+        let cert_id = *cert.form16_certificate_id.as_uuid();
+        self.repo.insert_form16_certificate(&cert).await?;
+        self.publish_event(
+            tid,
+            cert_id.to_string(),
+            TaxationEventData::Form16Generated {
+                employee_id: cmd.employee_id.to_string(),
+                fiscal_year: cmd.fiscal_year.clone(),
+                document_url,
+                occurred_at: Utc::now(),
+            },
+        )
+        .await?;
+        info!(tenant_id = %tid, cert_id = %cert_id, employee = %cmd.employee_id, fy = %cmd.fiscal_year, "Form 16 generated");
+        Ok(cert)
+    }
+
+    /// Generate a Form 16A certificate (non-salary TDS — per vendor per
+    /// FY). Source: the vendor's deductions with a payment in the FY;
+    /// "deductions exist" is the completeness gate (no 12-month
+    /// requirement). One certificate per (tenant, FY, vendor) —
+    /// `DuplicateCertificate`. Emits `Form16AGenerated`.
+    pub async fn generate_form16a(
+        &self,
+        tenant_id: TenantId,
+        user_id: Uuid,
+        cmd: GenerateForm16ACmd,
+    ) -> Result<Form16Certificate, TaxError> {
+        let tid = *tenant_id.as_uuid();
+        if self
+            .repo
+            .find_form16_certificate(
+                tid,
+                Form16CertificateType::Form16a,
+                None,
+                Some(cmd.vendor_id),
+                &cmd.fiscal_year,
+            )
+            .await?
+            .is_some()
+        {
+            return Err(TaxError::DuplicateCertificate {
+                subject: cmd.vendor_id.to_string(),
+                fiscal_year: cmd.fiscal_year.clone(),
+            });
+        }
+        let pan = self.repo.vendor_pan(tid, cmd.vendor_id).await?.ok_or_else(|| {
+            TaxError::InvalidInput(format!(
+                "vendor {} not found in the vendor master — Form 16A requires a PAN-linked vendor row",
+                cmd.vendor_id
+            ))
+        })?;
+        let (fy_start, fy_end) = fy_date_range(&cmd.fiscal_year);
+        let policy = self.repo.load_policy(tid).await?;
+        let deductions = self
+            .repo
+            .tds_deductions_for_pan(tid, &pan, fy_start, fy_end, None)
+            .await?
+            .into_iter()
+            .filter(|d| d.section != policy.salary_tds_section)
+            .collect::<Vec<_>>();
+        if deductions.is_empty() {
+            return Err(TaxError::Form16DataIncomplete(cmd.fiscal_year.clone()));
+        }
+        let entity_id = deductions[0].entity_id;
+        let document_url = cert_document_url("form16a", &cmd.vendor_id, &cmd.fiscal_year);
+        let cert = Form16Certificate {
+            form16_certificate_id: EntityId::new(),
+            tenant_id,
+            entity_id,
+            certificate_type: Form16CertificateType::Form16a,
+            fiscal_year: cmd.fiscal_year.clone(),
+            employee_id: None,
+            vendor_id: Some(cmd.vendor_id),
+            pan,
+            document_url: document_url.clone(),
+            status: Form16CertificateStatus::Generated,
+            generated_by_id: Some(user_id),
+            issued_at: None,
+            audit: AuditInfo::new(user_id),
+        };
+        let cert_id = *cert.form16_certificate_id.as_uuid();
+        self.repo.insert_form16_certificate(&cert).await?;
+        self.publish_event(
+            tid,
+            cert_id.to_string(),
+            TaxationEventData::Form16AGenerated {
+                vendor_id: cmd.vendor_id.to_string(),
+                fiscal_year: cmd.fiscal_year.clone(),
+                document_url,
+                occurred_at: Utc::now(),
+            },
+        )
+        .await?;
+        info!(tenant_id = %tid, cert_id = %cert_id, vendor = %cmd.vendor_id, fy = %cmd.fiscal_year, "Form 16A generated");
+        Ok(cert)
+    }
+
+    // ── Annual returns: GSTR-9 / GSTR-9C ────────────────────────────
+
+    /// Generate the GSTR-9 annual return for a fiscal year (spec
+    /// `GenerateGstr9`).
+    ///
+    /// Sources: the FY's GSTR-1 (outward supplies 4B, nil/exempt 7) and
+    /// GSTR-3B (RCM inward 3.1(d), ITC 4(A), RCM ITC 4(B)(2)) return lines
+    /// — no re-derivation from journals. The GSTN-schema-shaped payload is
+    /// stored in `json_data` with the annual turnover and the statutory
+    /// applicability (> ₹2 Cr, spec rule 6). Due 31 Dec of the following
+    /// year. Emits `Gstr9Generated`.
+    pub async fn generate_gstr9(
+        &self,
+        tenant_id: TenantId,
+        user_id: Uuid,
+        cmd: GenerateGstr9Cmd,
+    ) -> Result<GstReturn, TaxError> {
+        let tid = *tenant_id.as_uuid();
+        let registration = self.require_gst_registration(tid, cmd.gst_registration_id).await?;
+        if self
+            .repo
+            .find_gst_return_for_period(tid, cmd.gst_registration_id, GstReturnType::Gstr9, &cmd.fiscal_year)
+            .await?
+            .is_some()
+        {
+            return Err(TaxError::DuplicateGstReturn {
+                registration_id: cmd.gst_registration_id.to_string(),
+                return_type: "GSTR9".to_string(),
+                period: cmd.fiscal_year.clone(),
+            });
+        }
+        let (fy_start, fy_end) = fy_date_range(&cmd.fiscal_year);
+        let returns = self
+            .repo
+            .list_gst_returns(tid, cmd.gst_registration_id, Some(&cmd.fiscal_year))
+            .await?;
+
+        let mut outward_txval = 0i64;
+        let mut outward_tax = 0i64;
+        let mut nil_exempt = 0i64;
+        let mut rcm_txval = 0i64;
+        let mut rcm_tax = 0i64;
+        let mut itc_on_inputs = 0i64;
+        let mut itc_rcm = 0i64;
+        for r in &returns {
+            let lines = self.repo.list_gst_return_lines(tid, *r.gst_return_id.as_uuid()).await?;
+            match r.return_type {
+                GstReturnType::Gstr1 => {
+                    for l in &lines {
+                        match l.section.as_str() {
+                            "4B" => {
+                                outward_txval += l.taxable_value;
+                                outward_tax += l.igst_amount + l.cgst_amount + l.sgst_amount;
+                            }
+                            "7" => nil_exempt += l.taxable_value,
+                            _ => {}
+                        }
+                    }
+                }
+                GstReturnType::Gstr3b => {
+                    for l in &lines {
+                        match l.section.as_str() {
+                            "3.1(d)" => {
+                                rcm_txval += l.taxable_value;
+                                rcm_tax += l.igst_amount + l.cgst_amount + l.sgst_amount;
+                            }
+                            "4(A)" => itc_on_inputs += l.igst_amount + l.cgst_amount + l.sgst_amount,
+                            "4(B)(2)" => itc_rcm += l.igst_amount + l.cgst_amount + l.sgst_amount,
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let tax_liability = outward_tax + rcm_tax;
+        let itc_claimed = itc_on_inputs + itc_rcm;
+        let net_tax_payable = (tax_liability - itc_claimed).max(0);
+        let turnover = self
+            .repo
+            .annual_turnover(tid, registration.entity_id, fy_start, fy_end)
+            .await?;
+
+        let json_data = serde_json::json!({
+            "gstin": registration.gstin,
+            "fy": cmd.fiscal_year,
+            "gstr9": {
+                "outward_supplies": {
+                    "txval": outward_txval,
+                    "camt": outward_tax / 2,
+                    "samt": outward_tax - outward_tax / 2,
+                },
+                "nil_exempt_supplies": { "txval": nil_exempt },
+                "inward_rcm": { "txval": rcm_txval, "tax": rcm_tax },
+                "itc": { "itc_claimed": itc_claimed, "itc_on_inputs": itc_on_inputs, "itc_rcm": itc_rcm },
+            },
+            "annual_turnover": turnover,
+            "gstr9_applicable": turnover > 2_00_00_00_000, // > ₹2 Cr (spec rule 6)
+        });
+
+        let mut ret = GstReturn {
+            gst_return_id: EntityId::new(),
+            tenant_id,
+            gst_registration_id: cmd.gst_registration_id,
+            return_type: GstReturnType::Gstr9,
+            period: cmd.fiscal_year.clone(),
+            fiscal_year: cmd.fiscal_year.clone(),
+            status: GstReturnStatus::Generated,
+            due_date: gstr9_due_date(&cmd.fiscal_year),
+            filed_date: None,
+            filed_by_id: None,
+            acknowledgment_no: None,
+            json_data: Some(json_data),
+            tax_liability,
+            itc_claimed,
+            net_tax_payable,
+            audit: AuditInfo::new(user_id),
+        };
+        let return_id = *ret.gst_return_id.as_uuid();
+        self.repo.insert_gst_return(&ret).await?;
+
+        let lines = vec![
+            GstReturnLine {
+                gst_return_line_id: EntityId::new(),
+                tenant_id,
+                gst_return_id: return_id,
+                section: "9A".to_string(),
+                description: Some("Outward taxable supplies (aggregate of GSTR-1 4B)".to_string()),
+                taxable_value: outward_txval,
+                igst_amount: 0,
+                cgst_amount: outward_tax / 2,
+                sgst_amount: outward_tax - outward_tax / 2,
+                cess_amount: 0,
+                audit: AuditInfo::new(user_id),
+            },
+            GstReturnLine {
+                gst_return_line_id: EntityId::new(),
+                tenant_id,
+                gst_return_id: return_id,
+                section: "9B".to_string(),
+                description: Some("Nil rated / exempt supplies (aggregate of GSTR-1 7)".to_string()),
+                taxable_value: nil_exempt,
+                igst_amount: 0,
+                cgst_amount: 0,
+                sgst_amount: 0,
+                cess_amount: 0,
+                audit: AuditInfo::new(user_id),
+            },
+            GstReturnLine {
+                gst_return_line_id: EntityId::new(),
+                tenant_id,
+                gst_return_id: return_id,
+                section: "9C".to_string(),
+                description: Some("Inward supplies liable to reverse charge (aggregate of GSTR-3B 3.1(d))".to_string()),
+                taxable_value: rcm_txval,
+                igst_amount: rcm_tax,
+                cgst_amount: 0,
+                sgst_amount: 0,
+                cess_amount: 0,
+                audit: AuditInfo::new(user_id),
+            },
+            GstReturnLine {
+                gst_return_line_id: EntityId::new(),
+                tenant_id,
+                gst_return_id: return_id,
+                section: "9D".to_string(),
+                description: Some("Input tax credit (aggregate of GSTR-3B 4(A) + 4(B)(2))".to_string()),
+                taxable_value: 0,
+                igst_amount: 0,
+                cgst_amount: itc_claimed,
+                sgst_amount: 0,
+                cess_amount: 0,
+                audit: AuditInfo::new(user_id),
+            },
+        ];
+        for line in &lines {
+            self.repo.insert_gst_return_line(line).await?;
+        }
+
+        self.publish_event(
+            tid,
+            return_id.to_string(),
+            TaxationEventData::Gstr9Generated {
+                return_id: return_id.to_string(),
+                fiscal_year: cmd.fiscal_year.clone(),
+                tax_liability,
+                occurred_at: Utc::now(),
+            },
+        )
+        .await?;
+        ret.gst_return_id = EntityId::from_uuid(return_id);
+        info!(tenant_id = %tid, return_id = %return_id, fy = %cmd.fiscal_year, turnover = %turnover, "GSTR-9 generated");
+        Ok(ret)
+    }
+
+    /// Generate the GSTR-9C annual reconciliation statement (spec
+    /// `GenerateGstr9` — GSTR-9C leg).
+    ///
+    /// Turnover as per audited books (`audited_turnover`, or derived from
+    /// posted GL aggregates over the FY) vs as per returns (the FY's
+    /// GSTR-1 4B + 7 taxable values), with the difference and the statutory
+    /// applicability (> ₹5 Cr, spec rule 6) in `json_data`. Due 31 Dec of
+    /// the following year. Emits `Gstr9cGenerated`.
+    pub async fn generate_gstr9c(
+        &self,
+        tenant_id: TenantId,
+        user_id: Uuid,
+        cmd: GenerateGstr9cCmd,
+    ) -> Result<GstReturn, TaxError> {
+        let tid = *tenant_id.as_uuid();
+        let registration = self.require_gst_registration(tid, cmd.gst_registration_id).await?;
+        if self
+            .repo
+            .find_gst_return_for_period(tid, cmd.gst_registration_id, GstReturnType::Gstr9c, &cmd.fiscal_year)
+            .await?
+            .is_some()
+        {
+            return Err(TaxError::DuplicateGstReturn {
+                registration_id: cmd.gst_registration_id.to_string(),
+                return_type: "GSTR9C".to_string(),
+                period: cmd.fiscal_year.clone(),
+            });
+        }
+        let (fy_start, fy_end) = fy_date_range(&cmd.fiscal_year);
+        let books_turnover = match cmd.audited_turnover {
+            Some(t) => t,
+            None => self
+                .repo
+                .annual_turnover(tid, registration.entity_id, fy_start, fy_end)
+                .await?,
+        };
+        let returns = self
+            .repo
+            .list_gst_returns(tid, cmd.gst_registration_id, Some(&cmd.fiscal_year))
+            .await?;
+        let mut returns_turnover = 0i64;
+        let mut returns_tax = 0i64;
+        for r in returns.iter().filter(|r| r.return_type == GstReturnType::Gstr1) {
+            let lines = self.repo.list_gst_return_lines(tid, *r.gst_return_id.as_uuid()).await?;
+            for l in &lines {
+                if matches!(l.section.as_str(), "4B" | "7") {
+                    returns_turnover += l.taxable_value;
+                    returns_tax += l.igst_amount + l.cgst_amount + l.sgst_amount;
+                }
+            }
+        }
+        let difference = books_turnover - returns_turnover;
+
+        let json_data = serde_json::json!({
+            "gstin": registration.gstin,
+            "fy": cmd.fiscal_year,
+            "gstr9c": {
+                "turnover_as_per_audited_books": books_turnover,
+                "turnover_as_per_returns": returns_turnover,
+                "difference": difference,
+                "reconciliation": {
+                    "outward_tax_as_per_books": null, // audited books tax — from GL, not yet linked
+                    "outward_tax_as_per_returns": returns_tax,
+                },
+            },
+            "gstr9c_applicable": books_turnover > 5_00_00_00_000, // > ₹5 Cr (spec rule 6)
+        });
+
+        let mut ret = GstReturn {
+            gst_return_id: EntityId::new(),
+            tenant_id,
+            gst_registration_id: cmd.gst_registration_id,
+            return_type: GstReturnType::Gstr9c,
+            period: cmd.fiscal_year.clone(),
+            fiscal_year: cmd.fiscal_year.clone(),
+            status: GstReturnStatus::Generated,
+            due_date: gstr9_due_date(&cmd.fiscal_year),
+            filed_date: None,
+            filed_by_id: None,
+            acknowledgment_no: None,
+            json_data: Some(json_data),
+            tax_liability: 0,
+            itc_claimed: 0,
+            net_tax_payable: 0,
+            audit: AuditInfo::new(user_id),
+        };
+        let return_id = *ret.gst_return_id.as_uuid();
+        self.repo.insert_gst_return(&ret).await?;
+        self.publish_event(
+            tid,
+            return_id.to_string(),
+            TaxationEventData::Gstr9cGenerated {
+                return_id: return_id.to_string(),
+                fiscal_year: cmd.fiscal_year.clone(),
+                turnover_as_per_books: books_turnover,
+                turnover_as_per_returns: returns_turnover,
+                occurred_at: Utc::now(),
+            },
+        )
+        .await?;
+        ret.gst_return_id = EntityId::from_uuid(return_id);
+        info!(tenant_id = %tid, return_id = %return_id, fy = %cmd.fiscal_year, diff = %difference, "GSTR-9C generated");
+        Ok(ret)
+    }
+
     // ── Internal helpers ────────────────────────────────────────────
 
     async fn require_gst_registration(
@@ -2655,4 +3782,95 @@ fn aggregate_invoice_lines(lines: &[VendorInvoiceLineTaxRow]) -> (i64, i64, ItcE
         eligibility = ItcEligibility::Blocked;
     }
     (taxable, tax, eligibility)
+}
+
+/// GSTIN validation: 15 characters — 2-digit state code + 10-char PAN
+/// ([A-Z]{5}[0-9]{4}[A-Z]) + 1 entity code + 1 check char + 'Z'
+/// (CGST Rules r.10 — pattern used by the GSTN portal).
+fn valid_gstin(gstin: &str) -> bool {
+    let b = gstin.as_bytes();
+    b.len() == 15
+        && b[..2].iter().all(|c| c.is_ascii_digit())
+        && b[2..7].iter().all(|c| c.is_ascii_uppercase())
+        && b[7..11].iter().all(|c| c.is_ascii_digit())
+        && b[11].is_ascii_uppercase()
+        && b[12].is_ascii_alphanumeric()
+        && b[13].is_ascii_alphanumeric()
+        && b[14] == b'Z'
+}
+
+/// Date range of a fiscal year ("2026-27" → 2026-04-01 .. 2027-03-31).
+pub(crate) fn fy_date_range(fiscal_year: &str) -> (NaiveDate, NaiveDate) {
+    let start = fy_start_year(fiscal_year);
+    (
+        NaiveDate::from_ymd_opt(start, 4, 1)
+            .unwrap_or_else(|| NaiveDate::from_ymd_opt(1970, 4, 1).unwrap()),
+        NaiveDate::from_ymd_opt(start + 1, 3, 31)
+            .unwrap_or_else(|| NaiveDate::from_ymd_opt(1970, 3, 31).unwrap()),
+    )
+}
+
+/// Quarter date range within a FY ("Q1" of 2026 → 2026-04-01..2026-06-30;
+/// "Q4" → 2027-01-01..2027-03-31).
+fn quarter_range(quarter: &str, fy_start: i32) -> Option<(NaiveDate, NaiveDate)> {
+    let (m1, m2) = match quarter {
+        "Q1" => (4, 6),
+        "Q2" => (7, 9),
+        "Q3" => (10, 12),
+        "Q4" => (1, 3),
+        _ => return None,
+    };
+    let (y1, y2) = if quarter == "Q4" {
+        (fy_start + 1, fy_start + 1)
+    } else {
+        (fy_start, fy_start)
+    };
+    Some((
+        NaiveDate::from_ymd_opt(y1, m1, 1)?,
+        last_day_of_month(y2, m2),
+    ))
+}
+
+fn last_day_of_month(year: i32, month: u32) -> NaiveDate {
+    let (y, m) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
+    NaiveDate::from_ymd_opt(y, m, 1)
+        .and_then(|d| d.pred_opt())
+        .unwrap_or_else(|| NaiveDate::from_ymd_opt(year, month, 28).unwrap())
+}
+
+/// TDS return due date — 15th of the month after the quarter end
+/// (IT Rules r.31A; spec rule 11).
+fn tds_return_due_date(quarter: &str, fy_start: i32) -> NaiveDate {
+    let (y, m) = match quarter {
+        "Q1" => (fy_start, 7),
+        "Q2" => (fy_start, 10),
+        "Q3" => (fy_start + 1, 1),
+        "Q4" => (fy_start + 1, 4),
+        _ => (fy_start, 7),
+    };
+    NaiveDate::from_ymd_opt(y, m, 15).unwrap_or_else(|| NaiveDate::from_ymd_opt(2030, 7, 15).unwrap())
+}
+
+/// GSTR-9 / GSTR-9C due date — 31 Dec of the year after the FY end
+/// (spec rule 6: GSTR-9 by 31 Dec next FY).
+fn gstr9_due_date(fiscal_year: &str) -> NaiveDate {
+    let y = fy_start_year(fiscal_year) + 1;
+    NaiveDate::from_ymd_opt(y, 12, 31).unwrap_or_else(|| NaiveDate::from_ymd_opt(2030, 12, 31).unwrap())
+}
+
+/// 30 Sep after the FY end — s.44AB / trust audit 12A / Form 10B /
+/// Form 10BB / ITR-7 (CD §7.4; spec rule 16).
+pub(crate) fn audit_due_date(fiscal_year: &str) -> NaiveDate {
+    let y = fy_start_year(fiscal_year) + 1;
+    NaiveDate::from_ymd_opt(y, 9, 30).unwrap_or_else(|| NaiveDate::from_ymd_opt(2030, 9, 30).unwrap())
+}
+
+/// Placeholder certificate document URL — a stable, addressable path the
+/// document service (later phase) will render to a downloadable PDF.
+fn cert_document_url(kind: &str, subject: &Uuid, fiscal_year: &str) -> String {
+    format!("certificates/{kind}/{subject}/{fiscal_year}")
 }

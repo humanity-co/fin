@@ -12,8 +12,9 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::errors::TaxError;
+use crate::models::gst::{GstRate, GstRegistration, GstSupplyType};
 use crate::models::income::{FcraRegistration, IncomeApplication, IncomeApplicationLine, TrustExemption};
-use crate::models::tds::TdsSection;
+use crate::models::tds::{Form16Certificate, TdsReturn, TdsReturnDetail, TdsSection};
 use crate::repository::{TdsDeductionRow, TdsRegisterBalanceRow, TaxRepository};
 
 /// TDS register row — GL balance of one TDS Payable account (24.03.x),
@@ -327,6 +328,222 @@ impl TaxQueryHandler {
             }))),
             None => Ok(None),
         }
+    }
+
+    // ── GST registration & rate master (Phase 3a) ──────────────────
+
+    /// GST registrations, optionally scoped to an entity (spec
+    /// `GetGstRegistration(s)` — list registrations by entity).
+    pub async fn get_gst_registrations(
+        &self,
+        tenant_id: Uuid,
+        entity_id: Option<Uuid>,
+    ) -> Result<Vec<GstRegistration>, TaxError> {
+        self.repo.list_gst_registrations(tenant_id, entity_id).await
+    }
+
+    /// Rate master for an HSN/SAC code (spec `GetGstRates(hsn_sac)`):
+    /// every effective-dated row plus the rate effective `as_of`.
+    pub async fn get_gst_rates(
+        &self,
+        tenant_id: Uuid,
+        hsn_sac_code: &str,
+        supply_type: Option<GstSupplyType>,
+        as_of: chrono::NaiveDate,
+    ) -> Result<serde_json::Value, TaxError> {
+        let rates = self
+            .repo
+            .list_gst_rates(tenant_id, hsn_sac_code, supply_type)
+            .await?;
+        let effective = match supply_type {
+            Some(st) => self.repo.find_gst_rate(tenant_id, hsn_sac_code, st, as_of).await?,
+            None => {
+                // Resolve goods and services separately when the supply
+                // type is not filtered; pick the first hit.
+                let g = self.repo.find_gst_rate(tenant_id, hsn_sac_code, GstSupplyType::Goods, as_of).await?;
+                let s = self.repo.find_gst_rate(tenant_id, hsn_sac_code, GstSupplyType::Services, as_of).await?;
+                g.or(s)
+            }
+        };
+        Ok(serde_json::json!({
+            "hsn_sac_code": hsn_sac_code,
+            "rates": rates,
+            "effective_rate_as_of": as_of.to_string(),
+            "effective_rate": effective,
+        }))
+    }
+
+    // ── TDS returns & certificates (Phase 3a) ───────────────────────
+
+    /// TDS returns for an entity, optionally by fiscal year (spec
+    /// `GetTdsReturns(entity, fy)`).
+    pub async fn get_tds_returns(
+        &self,
+        tenant_id: Uuid,
+        entity_id: Option<Uuid>,
+        fiscal_year: Option<&str>,
+    ) -> Result<Vec<TdsReturn>, TaxError> {
+        self.repo.list_tds_returns(tenant_id, entity_id, fiscal_year).await
+    }
+
+    /// A TDS return by id with its deduction details.
+    pub async fn get_tds_return(
+        &self,
+        tenant_id: Uuid,
+        return_id: Uuid,
+    ) -> Result<Option<serde_json::Value>, TaxError> {
+        let ret = self.repo.find_tds_return(tenant_id, return_id).await?;
+        match ret {
+            Some(r) => {
+                let details = self.repo.list_tds_return_details(tenant_id, return_id).await?;
+                Ok(Some(serde_json::json!({
+                    "return": r,
+                    "details": details,
+                })))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// The Form 16 certificate for an employee + FY.
+    pub async fn get_form16_certificate(
+        &self,
+        tenant_id: Uuid,
+        employee_id: Uuid,
+        fiscal_year: &str,
+    ) -> Result<Option<Form16Certificate>, TaxError> {
+        self.repo
+            .find_form16_certificate(
+                tenant_id,
+                crate::models::tds::Form16CertificateType::Form16,
+                Some(employee_id),
+                None,
+                fiscal_year,
+            )
+            .await
+    }
+
+    /// The Form 16A certificate for a vendor + FY.
+    pub async fn get_form16a_certificate(
+        &self,
+        tenant_id: Uuid,
+        vendor_id: Uuid,
+        fiscal_year: &str,
+    ) -> Result<Option<Form16Certificate>, TaxError> {
+        self.repo
+            .find_form16_certificate(
+                tenant_id,
+                crate::models::tds::Form16CertificateType::Form16a,
+                None,
+                Some(vendor_id),
+                fiscal_year,
+            )
+            .await
+    }
+
+    // ── Income-tax compliance: ITR-7 extract & audit requirements ───
+
+    /// ITR-7 data extract (spec `GetItr7Data(fy)`) — the annual income-tax
+    /// filing bundle for a trust/society: income application (85% rule),
+    /// exemption registrations (12A/12AB/10(23C)), FCRA registrations and
+    /// the ITR-7 due date (30 Sep after the FY end).
+    pub async fn get_itr7_data(
+        &self,
+        tenant_id: Uuid,
+        entity_id: Uuid,
+        fiscal_year_id: Uuid,
+        fiscal_year: &str,
+    ) -> Result<serde_json::Value, TaxError> {
+        let application = self
+            .repo
+            .find_income_application(tenant_id, fiscal_year_id, entity_id)
+            .await?;
+        let application_view = match &application {
+            Some(a) => {
+                let lines = self
+                    .repo
+                    .list_income_application_lines(tenant_id, *a.income_application_id.as_uuid())
+                    .await?;
+                Some(serde_json::json!({ "application": a, "lines": lines }))
+            }
+            None => None,
+        };
+        let exemptions = self.repo.list_trust_exemptions(tenant_id, entity_id).await?;
+        let fcra = self.repo.list_fcra_registrations(tenant_id, entity_id).await?;
+        Ok(serde_json::json!({
+            "entity_id": entity_id,
+            "fiscal_year": fiscal_year,
+            "income_application": application_view,
+            "trust_exemptions": exemptions,
+            "fcra_registrations": fcra,
+            "itr7_due_date": crate::commands::audit_due_date(fiscal_year),
+            "itr7_applicable": true, // trusts/societies file ITR-7 (IT Act s.139(4A))
+        }))
+    }
+
+    /// Audit requirements checklist (spec `GetAuditRequirements(fy)`) —
+    /// s.44AB tax audit, trust audit (12A), Form 10B / 10BB and ITR-7, all
+    /// due 30 Sep after the FY end (CD §7.4, spec rule 16). Exemption
+    /// presence drives the trust-audit items.
+    pub async fn get_audit_requirements(
+        &self,
+        tenant_id: Uuid,
+        entity_id: Uuid,
+        fiscal_year: &str,
+    ) -> Result<serde_json::Value, TaxError> {
+        let due = crate::commands::audit_due_date(fiscal_year);
+        let exemptions = self.repo.list_trust_exemptions(tenant_id, entity_id).await?;
+        let has_exemption = exemptions.iter().any(|e| {
+            matches!(
+                e.status,
+                crate::models::income::TrustExemptionStatus::Active
+                    | crate::models::income::TrustExemptionStatus::RenewalPending
+            )
+        });
+        let items = vec![
+            serde_json::json!({
+                "audit_type": "TAX_AUDIT_44AB",
+                "statute": "IT Act s.44AB",
+                "due_date": due,
+                "required": true,
+                "note": "Tax audit — applicable when the institution has taxable business income",
+            }),
+            serde_json::json!({
+                "audit_type": "TRUST_AUDIT_12A",
+                "statute": "IT Act s.12A / trust audit",
+                "due_date": due,
+                "required": has_exemption,
+                "note": "Audit of trust accounts required while a 12A/12AB/10(23C) exemption is in force",
+            }),
+            serde_json::json!({
+                "audit_type": "FORM_10B",
+                "statute": "IT Rules r.17B",
+                "due_date": due,
+                "required": has_exemption,
+                "note": "Audit report in Form 10B (a/cs audited under s.12A(1)(b))",
+            }),
+            serde_json::json!({
+                "audit_type": "FORM_10BB",
+                "statute": "IT Rules r.17C",
+                "due_date": due,
+                "required": has_exemption,
+                "note": "Statement of particulars in Form 10BB (s.10(23C)/11(2) accumulation)",
+            }),
+            serde_json::json!({
+                "audit_type": "ITR_7",
+                "statute": "IT Act s.139(4A)",
+                "due_date": due,
+                "required": true,
+                "note": "Return of income for trusts/societies — due 30 Sep",
+            }),
+        ];
+        Ok(serde_json::json!({
+            "entity_id": entity_id,
+            "fiscal_year": fiscal_year,
+            "common_due_date": due,
+            "has_active_exemption": has_exemption,
+            "items": items,
+        }))
     }
 }
 

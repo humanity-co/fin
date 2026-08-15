@@ -33,7 +33,8 @@ use crate::models::income::{
 };
 use crate::models::itc::{ItcEligibility, ItcRegister, ItcRegisterLine, ItcRegisterStatus};
 use crate::models::tds::{
-    TdsDeposit, TdsDepositStatus, TdsSection, TdsSectionApplicableTo,
+    Form16Certificate, Form16CertificateStatus, Form16CertificateType, TdsDeposit, TdsDepositStatus,
+    TdsReturn, TdsReturnDetail, TdsReturnStatus, TdsReturnType, TdsSection, TdsSectionApplicableTo,
 };
 
 /// Nil tenant (GLOBAL defaults) — rows migrated from the base DDL map here.
@@ -59,6 +60,14 @@ pub struct TaxPolicy {
     pub tds_deposit_due_day: i64,
     /// Comma-separated s.11(5) approved investment categories.
     pub section115_securities_list: Vec<String>,
+    /// State name → 2-digit code map ("Maharashtra:27,Karnataka:29") used to
+    /// validate that a GSTIN's state code matches the entity's registered
+    /// state (spec `RegisterGstin` invariant). Entities whose state has no
+    /// mapping are not checked.
+    pub state_code_map: Vec<(String, String)>,
+    /// Section code used for salary TDS (Form 24Q / Form 16). IT Act s.192
+    /// — "192" by default; configurable per tenant.
+    pub salary_tds_section: String,
 }
 
 impl Default for TaxPolicy {
@@ -72,6 +81,8 @@ impl Default for TaxPolicy {
             fcra_admin_expense_ratio_limit: 20,
             tds_deposit_due_day: 7,
             section115_securities_list: vec![],
+            state_code_map: vec![],
+            salary_tds_section: "192".to_string(),
         }
     }
 }
@@ -382,6 +393,25 @@ pub struct TdsDeductionRow {
     pub created_at: Option<DateTime<Utc>>,
 }
 
+/// One deduction covered by a TDS return, joined with its payment and
+/// deposit-challan context (used by `GenerateTdsReturn` / `FileTdsReturn` /
+/// Form 16 / Form 16A generation). `entity_id` comes from the vendor
+/// payment, `deposit_date`/`challan_reference` from `tds_deposits`.
+#[derive(sqlx::FromRow, Debug, Clone)]
+pub(crate) struct TdsReturnDeductionRow {
+    pub tds_deduction_id: Uuid,
+    pub entity_id: Uuid,
+    pub vendor_id: Option<Uuid>,
+    pub pan: String,
+    pub section: String,
+    pub payment_date: NaiveDate,
+    pub payment_amount: i64,
+    pub tds_rate: Decimal,
+    pub tds_amount: i64,
+    pub challan_reference: Option<String>,
+    pub deposit_date: Option<NaiveDate>,
+}
+
 #[derive(sqlx::FromRow)]
 pub(crate) struct TdsDepositRow {
     tds_deposit_id: Uuid,
@@ -413,6 +443,151 @@ impl TdsDepositRow {
             journal_id: self.journal_id,
             status: TdsDepositStatus::from_db_str(&self.status),
             recorded_by_id: self.recorded_by_id,
+            audit: AuditInfo {
+                created_by: self.created_by.unwrap_or_else(Uuid::nil),
+                created_at: self.created_at.unwrap_or_else(Utc::now),
+                updated_by: self.updated_by.unwrap_or_else(Uuid::nil),
+                updated_at: self.updated_at.unwrap_or_else(Utc::now),
+            },
+        }
+    }
+}
+
+/// A deduction row inside a TDS return (mirrors `tds_return_details`).
+#[derive(sqlx::FromRow)]
+pub(crate) struct TdsReturnDetailRow {
+    tds_return_detail_id: Uuid,
+    tenant_id: Uuid,
+    tds_return_id: Uuid,
+    vendor_id: Option<Uuid>,
+    employee_id: Option<Uuid>,
+    pan: String,
+    section: String,
+    payment_date: NaiveDate,
+    payment_amount: i64,
+    tds_rate: Decimal,
+    tds_amount: i64,
+    surcharge: Option<i64>,
+    cess: Option<i64>,
+    total_tds: i64,
+    challan_details: Option<Value>,
+    salary_month: Option<i32>,
+    created_at: Option<DateTime<Utc>>,
+}
+
+impl TdsReturnDetailRow {
+    pub(crate) fn into_model(self) -> TdsReturnDetail {
+        TdsReturnDetail {
+            tds_return_detail_id: EntityId::from_uuid(self.tds_return_detail_id),
+            tenant_id: TenantId::from_uuid(self.tenant_id),
+            tds_return_id: self.tds_return_id,
+            vendor_id: self.vendor_id,
+            employee_id: self.employee_id,
+            pan: self.pan,
+            section: self.section,
+            payment_date: self.payment_date,
+            payment_amount: self.payment_amount,
+            tds_rate: self.tds_rate,
+            tds_amount: self.tds_amount,
+            surcharge: self.surcharge.unwrap_or(0),
+            cess: self.cess.unwrap_or(0),
+            total_tds: self.total_tds,
+            challan_details: self.challan_details,
+            salary_month: self.salary_month,
+            audit: AuditInfo {
+                created_by: Uuid::nil(),
+                created_at: self.created_at.unwrap_or_else(Utc::now),
+                updated_by: Uuid::nil(),
+                updated_at: Utc::now(),
+            },
+        }
+    }
+}
+
+/// A TDS return row (mirrors `tds_returns`).
+#[derive(sqlx::FromRow)]
+pub(crate) struct TdsReturnRow {
+    tds_return_id: Uuid,
+    tenant_id: Uuid,
+    entity_id: Uuid,
+    return_type: String,
+    quarter: String,
+    fiscal_year: String,
+    status: String,
+    due_date: NaiveDate,
+    filed_date: Option<NaiveDate>,
+    acknowledgment_no: Option<String>,
+    total_deductions: Option<i64>,
+    total_deposits: Option<i64>,
+    json_data: Option<Value>,
+    created_at: Option<DateTime<Utc>>,
+    created_by: Option<Uuid>,
+    updated_at: Option<DateTime<Utc>>,
+    updated_by: Option<Uuid>,
+}
+
+impl TdsReturnRow {
+    pub(crate) fn into_model(self) -> TdsReturn {
+        TdsReturn {
+            tds_return_id: EntityId::from_uuid(self.tds_return_id),
+            tenant_id: TenantId::from_uuid(self.tenant_id),
+            entity_id: self.entity_id,
+            return_type: TdsReturnType::from_db_str(&self.return_type),
+            quarter: self.quarter,
+            fiscal_year: self.fiscal_year,
+            status: TdsReturnStatus::from_db_str(&self.status),
+            due_date: self.due_date,
+            filed_date: self.filed_date,
+            acknowledgment_no: self.acknowledgment_no,
+            total_deductions: self.total_deductions.unwrap_or(0),
+            total_deposits: self.total_deposits.unwrap_or(0),
+            json_data: self.json_data,
+            audit: AuditInfo {
+                created_by: self.created_by.unwrap_or_else(Uuid::nil),
+                created_at: self.created_at.unwrap_or_else(Utc::now),
+                updated_by: self.updated_by.unwrap_or_else(Uuid::nil),
+                updated_at: self.updated_at.unwrap_or_else(Utc::now),
+            },
+        }
+    }
+}
+
+/// A Form 16 / Form 16A certificate row (mirrors `form16_certificates`).
+#[derive(sqlx::FromRow)]
+pub(crate) struct Form16CertificateRow {
+    form16_certificate_id: Uuid,
+    tenant_id: Uuid,
+    entity_id: Uuid,
+    certificate_type: String,
+    fiscal_year: String,
+    employee_id: Option<Uuid>,
+    vendor_id: Option<Uuid>,
+    pan: String,
+    document_url: String,
+    status: String,
+    generated_by_id: Option<Uuid>,
+    issued_at: Option<DateTime<Utc>>,
+    created_at: Option<DateTime<Utc>>,
+    created_by: Option<Uuid>,
+    updated_at: Option<DateTime<Utc>>,
+    updated_by: Option<Uuid>,
+}
+
+impl Form16CertificateRow {
+    pub(crate) fn into_model(self) -> Form16Certificate {
+        Form16Certificate {
+            form16_certificate_id: EntityId::from_uuid(self.form16_certificate_id),
+            tenant_id: TenantId::from_uuid(self.tenant_id),
+            entity_id: self.entity_id,
+            certificate_type: Form16CertificateType::from_db_str(&self.certificate_type),
+            fiscal_year: self.fiscal_year,
+            employee_id: self.employee_id,
+            vendor_id: self.vendor_id,
+            pan: self.pan,
+            document_url: self.document_url,
+            status: Form16CertificateStatus::from_db_str(&self.status),
+            generated_by_id: self.generated_by_id,
+            issued_at: self.issued_at,
             audit: AuditInfo {
                 created_by: self.created_by.unwrap_or_else(Uuid::nil),
                 created_at: self.created_at.unwrap_or_else(Utc::now),
@@ -700,6 +875,21 @@ impl TaxRepository {
                         .filter(|s| !s.is_empty())
                         .collect();
                 }
+                "tax.state_code_map" => {
+                    policy.state_code_map = text
+                        .split(',')
+                        .filter_map(|pair| {
+                            let (k, v) = pair.split_once(':')?;
+                            Some((k.trim().to_string(), v.trim().to_string()))
+                        })
+                        .collect();
+                }
+                "tax.salary_tds_section" => {
+                    let s = text.trim();
+                    if !s.is_empty() {
+                        policy.salary_tds_section = s.to_string();
+                    }
+                }
                 _ => {}
             }
         }
@@ -756,6 +946,223 @@ impl TaxRepository {
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(GstRateRow::into_model))
+    }
+
+    /// List GST registrations, optionally scoped to one entity (spec
+    /// `GetGstRegistration(s)` — list registrations by entity).
+    pub async fn list_gst_registrations(
+        &self,
+        tenant_id: Uuid,
+        entity_id: Option<Uuid>,
+    ) -> Result<Vec<GstRegistration>, TaxError> {
+        let rows = match entity_id {
+            Some(eid) => {
+                sqlx::query_as::<_, GstRegistrationRow>(
+                    r#"
+                    SELECT gst_registration_id, tenant_id, entity_id, gstin, trade_name, legal_name,
+                           registration_type, filing_frequency, is_composite, state_code,
+                           address_line1, address_line2, city, state, pincode, is_active,
+                           created_at, created_by, updated_at, updated_by
+                    FROM gst_registrations
+                    WHERE tenant_id = $1 AND entity_id = $2 AND deleted_at IS NULL
+                    ORDER BY created_at
+                    "#,
+                )
+                .bind(tenant_id)
+                .bind(eid)
+                .fetch_all(&self.pool)
+                .await?
+            }
+            None => {
+                sqlx::query_as::<_, GstRegistrationRow>(
+                    r#"
+                    SELECT gst_registration_id, tenant_id, entity_id, gstin, trade_name, legal_name,
+                           registration_type, filing_frequency, is_composite, state_code,
+                           address_line1, address_line2, city, state, pincode, is_active,
+                           created_at, created_by, updated_at, updated_by
+                    FROM gst_registrations
+                    WHERE tenant_id = $1 AND deleted_at IS NULL
+                    ORDER BY created_at
+                    "#,
+                )
+                .bind(tenant_id)
+                .fetch_all(&self.pool)
+                .await?
+            }
+        };
+        Ok(rows.into_iter().map(GstRegistrationRow::into_model).collect())
+    }
+
+    /// Find any non-deleted GST registration of an entity (the base DDL
+    /// constrains one registration per entity).
+    pub async fn find_gst_registration_by_entity(
+        &self,
+        tenant_id: Uuid,
+        entity_id: Uuid,
+    ) -> Result<Option<GstRegistration>, TaxError> {
+        let row = sqlx::query_as::<_, GstRegistrationRow>(
+            r#"
+            SELECT gst_registration_id, tenant_id, entity_id, gstin, trade_name, legal_name,
+                   registration_type, filing_frequency, is_composite, state_code,
+                   address_line1, address_line2, city, state, pincode, is_active,
+                   created_at, created_by, updated_at, updated_by
+            FROM gst_registrations
+            WHERE tenant_id = $1 AND entity_id = $2 AND deleted_at IS NULL
+            LIMIT 1
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(entity_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(GstRegistrationRow::into_model))
+    }
+
+    /// Insert a GST registration (spec `RegisterGstin`). Uniqueness is
+    /// enforced by the DB (tenant_id, gstin) and (entity_id) constraints.
+    pub async fn insert_gst_registration(&self, r: &GstRegistration) -> Result<(), TaxError> {
+        sqlx::query(
+            r#"
+            INSERT INTO gst_registrations (
+                gst_registration_id, tenant_id, entity_id, gstin, trade_name, legal_name,
+                registration_type, filing_frequency, is_composite, state_code,
+                address_line1, address_line2, city, state, pincode, is_active,
+                created_by, updated_by
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+            "#,
+        )
+        .bind(r.gst_registration_id.as_uuid())
+        .bind(r.tenant_id.as_uuid())
+        .bind(r.entity_id)
+        .bind(&r.gstin)
+        .bind(&r.trade_name)
+        .bind(&r.legal_name)
+        .bind(r.registration_type.to_db_str())
+        .bind(r.filing_frequency.to_db_str())
+        .bind(r.is_composite)
+        .bind(&r.state_code)
+        .bind(&r.address_line1)
+        .bind(&r.address_line2)
+        .bind(&r.city)
+        .bind(&r.state)
+        .bind(&r.pincode)
+        .bind(r.is_active)
+        .bind(r.audit.created_by)
+        .bind(r.audit.updated_by)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// All effective-dated rate-master rows for an HSN/SAC code (optionally
+    /// filtered by supply type) — the spec `GetGstRates(hsn_sac)` master.
+    pub async fn list_gst_rates(
+        &self,
+        tenant_id: Uuid,
+        hsn_sac_code: &str,
+        supply_type: Option<GstSupplyType>,
+    ) -> Result<Vec<GstRate>, TaxError> {
+        let rows = match supply_type {
+            Some(st) => {
+                sqlx::query_as::<_, GstRateRow>(
+                    r#"
+                    SELECT gst_rate_id, tenant_id, hsn_sac_code, description, rate, itc_eligible,
+                           effective_from, effective_to, supply_type, is_active,
+                           created_at, created_by, updated_at, updated_by
+                    FROM gst_rate_master
+                    WHERE tenant_id = $1 AND hsn_sac_code = $2 AND supply_type = $3
+                      AND deleted_at IS NULL
+                    ORDER BY effective_from
+                    "#,
+                )
+                .bind(tenant_id)
+                .bind(hsn_sac_code)
+                .bind(st.to_db_str())
+                .fetch_all(&self.pool)
+                .await?
+            }
+            None => {
+                sqlx::query_as::<_, GstRateRow>(
+                    r#"
+                    SELECT gst_rate_id, tenant_id, hsn_sac_code, description, rate, itc_eligible,
+                           effective_from, effective_to, supply_type, is_active,
+                           created_at, created_by, updated_at, updated_by
+                    FROM gst_rate_master
+                    WHERE tenant_id = $1 AND hsn_sac_code = $2 AND deleted_at IS NULL
+                    ORDER BY effective_from
+                    "#,
+                )
+                .bind(tenant_id)
+                .bind(hsn_sac_code)
+                .fetch_all(&self.pool)
+                .await?
+            }
+        };
+        Ok(rows.into_iter().map(GstRateRow::into_model).collect())
+    }
+
+    /// Insert a rate-master row (spec `UpsertGstRate`). The DB rejects
+    /// overlapping effective ranges per (tenant, hsn_sac, supply_type) via
+    /// the EXCLUDE constraint (migration 004) — callers pre-check overlaps
+    /// and map the unique violation here.
+    pub async fn insert_gst_rate(&self, r: &GstRate) -> Result<(), TaxError> {
+        sqlx::query(
+            r#"
+            INSERT INTO gst_rate_master (
+                gst_rate_id, tenant_id, hsn_sac_code, description, rate, itc_eligible,
+                effective_from, effective_to, supply_type, is_active, created_by, updated_by
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+            "#,
+        )
+        .bind(r.gst_rate_id.as_uuid())
+        .bind(r.tenant_id.as_uuid())
+        .bind(&r.hsn_sac_code)
+        .bind(&r.description)
+        .bind(r.rate)
+        .bind(r.itc_eligible)
+        .bind(r.effective_from)
+        .bind(r.effective_to)
+        .bind(r.supply_type.to_db_str())
+        .bind(r.is_active)
+        .bind(r.audit.created_by)
+        .bind(r.audit.updated_by)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Update an existing rate-master row in place (same effective_from —
+    /// the PUT/upsert path of `UpsertGstRate`).
+    pub async fn update_gst_rate(
+        &self,
+        tenant_id: Uuid,
+        gst_rate_id: Uuid,
+        description: Option<&str>,
+        rate: i64,
+        itc_eligible: bool,
+        effective_to: Option<NaiveDate>,
+        is_active: bool,
+        updated_by: Uuid,
+    ) -> Result<(), TaxError> {
+        sqlx::query(
+            r#"
+            UPDATE gst_rate_master
+            SET description = $3, rate = $4, itc_eligible = $5, effective_to = $6,
+                is_active = $7, updated_at = now(), updated_by = $8, version = version + 1
+            WHERE tenant_id = $1 AND gst_rate_id = $2 AND deleted_at IS NULL
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(gst_rate_id)
+        .bind(description)
+        .bind(rate)
+        .bind(itc_eligible)
+        .bind(effective_to)
+        .bind(is_active)
+        .bind(updated_by)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     // ── GST returns ─────────────────────────────────────────────────
@@ -1453,6 +1860,72 @@ impl TaxRepository {
         Ok(rows.into_iter().map(TdsSectionRow::into_model).collect())
     }
 
+    /// Insert a tenant-specific TDS section configuration row
+    /// (spec `ConfigureTdsSection` — effective-dated per the model).
+    pub async fn insert_tds_section(&self, s: &TdsSection) -> Result<(), TaxError> {
+        sqlx::query(
+            r#"
+            INSERT INTO tds_sections (
+                tds_section_id, tenant_id, section_code, description, default_rate,
+                threshold_per_payment, threshold_aggregate, applicable_to, is_active,
+                effective_from, effective_to, threshold_excess_only, created_by, updated_by
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+            "#,
+        )
+        .bind(s.tds_section_id.as_uuid())
+        .bind(s.tenant_id.as_uuid())
+        .bind(&s.section_code)
+        .bind(&s.description)
+        .bind(s.default_rate)
+        .bind(s.threshold_per_payment)
+        .bind(s.threshold_aggregate)
+        .bind(s.applicable_to.to_db_str())
+        .bind(s.is_active)
+        .bind(s.effective_from)
+        .bind(s.effective_to)
+        .bind(s.threshold_excess_only)
+        .bind(s.audit.created_by)
+        .bind(s.audit.updated_by)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Update the currently-effective TDS section row in place
+    /// (PUT-style `ConfigureTdsSection` on a tenant row).
+    pub async fn update_tds_section(
+        &self,
+        tenant_id: Uuid,
+        tds_section_id: Uuid,
+        default_rate: Decimal,
+        threshold_per_payment: Option<i64>,
+        threshold_aggregate: Option<i64>,
+        threshold_excess_only: bool,
+        applicable_to: TdsSectionApplicableTo,
+        updated_by: Uuid,
+    ) -> Result<(), TaxError> {
+        sqlx::query(
+            r#"
+            UPDATE tds_sections
+            SET default_rate = $3, threshold_per_payment = $4, threshold_aggregate = $5,
+                threshold_excess_only = $6, applicable_to = $7,
+                updated_at = now(), updated_by = $8, entity_version = entity_version + 1
+            WHERE tenant_id = $1 AND tds_section_id = $2 AND is_active = TRUE
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(tds_section_id)
+        .bind(default_rate)
+        .bind(threshold_per_payment)
+        .bind(threshold_aggregate)
+        .bind(threshold_excess_only)
+        .bind(applicable_to.to_db_str())
+        .bind(updated_by)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// A valid Section 197 certificate for the vendor/section as of a date
     /// (lower/nil-deduction override — IT Act s.197).
     pub async fn find_section197_certificate(
@@ -1733,7 +2206,526 @@ impl TaxRepository {
         Ok(rows.into_iter().map(TdsDepositRow::into_model).collect())
     }
 
+    // ── TDS returns & certificates (Phase 3a) ─────────────────────
+
+    /// Deductions with DEPOSITED deposit status whose challan deposit falls
+    /// in [quarter_start, quarter_end] for an entity, filtered by the
+    /// return type's section set (24Q = salary section, 27Q = sections
+    /// flagged NON_RESIDENT, 26Q = everything else). One row per deduction
+    /// (DISTINCT ON — a deduction may have several challans). `entity_id`
+    /// comes from the vendor payment; challan context from `tds_deposits`.
+    pub async fn tds_deductions_for_return(
+        &self,
+        tenant_id: Uuid,
+        entity_id: Uuid,
+        return_type: TdsReturnType,
+        salary_section: &str,
+        quarter_start: NaiveDate,
+        quarter_end: NaiveDate,
+    ) -> Result<Vec<TdsReturnDeductionRow>, TaxError> {
+        let global = Uuid::parse_str(GLOBAL_TENANT).expect("static GLOBAL_TENANT uuid");
+        let base = r#"
+            SELECT DISTINCT ON (td.tds_deduction_id)
+                   td.tds_deduction_id, vp.entity_id, vp.vendor_id,
+                   td.pan_of_deductee AS pan, td.tds_section AS section,
+                   vp.payment_date, vp.amount AS payment_amount,
+                   td.tds_rate, td.tds_amount, dep.challan_reference, dep.deposit_date
+            FROM tds_deductions td
+            JOIN vendor_payments vp ON vp.payment_id = td.payment_id AND vp.tenant_id = td.tenant_id
+            JOIN tds_deposits dep ON dep.tds_deduction_id = td.tds_deduction_id AND dep.tenant_id = td.tenant_id
+            WHERE td.tenant_id = $1 AND vp.entity_id = $2
+              AND td.tds_deposit_status = 'DEPOSITED'
+              AND dep.deposit_date BETWEEN $3 AND $4
+        "#;
+        let rows: Vec<TdsReturnDeductionRow> = match return_type {
+            TdsReturnType::Form24q => sqlx::query_as::<_, TdsReturnDeductionRow>(
+                &format!("{base} AND td.tds_section = $5 ORDER BY td.tds_deduction_id, dep.deposit_date"),
+            )
+            .bind(tenant_id)
+            .bind(entity_id)
+            .bind(quarter_start)
+            .bind(quarter_end)
+            .bind(salary_section)
+            .fetch_all(&self.pool)
+            .await?,
+            TdsReturnType::Form27q => sqlx::query_as::<_, TdsReturnDeductionRow>(
+                &format!(
+                    "{base} AND td.tds_section IN (SELECT section_code FROM tds_sections \
+                     WHERE tenant_id IN ($5, $6) AND applicable_to = 'NON_RESIDENT' AND is_active = TRUE) \
+                     ORDER BY td.tds_deduction_id, dep.deposit_date"
+                ),
+            )
+            .bind(tenant_id)
+            .bind(entity_id)
+            .bind(quarter_start)
+            .bind(quarter_end)
+            .bind(tenant_id)
+            .bind(global)
+            .fetch_all(&self.pool)
+            .await?,
+            TdsReturnType::Form26q => sqlx::query_as::<_, TdsReturnDeductionRow>(
+                &format!(
+                    "{base} AND td.tds_section <> $5 AND td.tds_section NOT IN \
+                     (SELECT section_code FROM tds_sections \
+                     WHERE tenant_id IN ($6, $7) AND applicable_to = 'NON_RESIDENT' AND is_active = TRUE) \
+                     ORDER BY td.tds_deduction_id, dep.deposit_date"
+                ),
+            )
+            .bind(tenant_id)
+            .bind(entity_id)
+            .bind(quarter_start)
+            .bind(quarter_end)
+            .bind(salary_section)
+            .bind(tenant_id)
+            .bind(global)
+            .fetch_all(&self.pool)
+            .await?,
+        };
+        Ok(rows)
+    }
+
+    /// Deductions for one PAN within a date range, optionally restricted to
+    /// a section fragment (Form 16: salary section; Form 16A: non-salary).
+    /// `section_filter` is a static SQL fragment built from enum branches
+    /// only (never user input).
+    pub async fn tds_deductions_for_pan(
+        &self,
+        tenant_id: Uuid,
+        pan: &str,
+        from: NaiveDate,
+        to: NaiveDate,
+        section_filter: Option<&str>,
+    ) -> Result<Vec<TdsReturnDeductionRow>, TaxError> {
+        let base = r#"
+            SELECT DISTINCT ON (td.tds_deduction_id)
+                   td.tds_deduction_id, vp.entity_id, vp.vendor_id,
+                   td.pan_of_deductee AS pan, td.tds_section AS section,
+                   vp.payment_date, vp.amount AS payment_amount,
+                   td.tds_rate, td.tds_amount, dep.challan_reference, dep.deposit_date
+            FROM tds_deductions td
+            JOIN vendor_payments vp ON vp.payment_id = td.payment_id AND vp.tenant_id = td.tenant_id
+            LEFT JOIN tds_deposits dep ON dep.tds_deduction_id = td.tds_deduction_id AND dep.tenant_id = td.tenant_id
+            WHERE td.tenant_id = $1 AND td.pan_of_deductee = $2
+              AND vp.payment_date BETWEEN $3 AND $4
+              AND td.tds_deposit_status IN ('DEPOSITED', 'FILED')
+        "#;
+        let sql = match section_filter {
+            Some(f) => format!("{base} AND {f} ORDER BY td.tds_deduction_id, dep.deposit_date"),
+            None => format!("{base} ORDER BY td.tds_deduction_id, dep.deposit_date"),
+        };
+        let rows = sqlx::query_as::<_, TdsReturnDeductionRow>(&sql)
+            .bind(tenant_id)
+            .bind(pan)
+            .bind(from)
+            .bind(to)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows)
+    }
+
+    /// Insert a TDS return (spec `GenerateTdsReturn`); the (entity, type,
+    /// quarter, fy) uniqueness constraint is the idempotency key.
+    pub async fn insert_tds_return(&self, r: &TdsReturn) -> Result<(), TaxError> {
+        sqlx::query(
+            r#"
+            INSERT INTO tds_returns (
+                tds_return_id, tenant_id, entity_id, return_type, quarter, fiscal_year,
+                status, due_date, filed_date, acknowledgment_no,
+                total_deductions, total_deposits, json_data, created_by, updated_by
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+            "#,
+        )
+        .bind(r.tds_return_id.as_uuid())
+        .bind(r.tenant_id.as_uuid())
+        .bind(r.entity_id)
+        .bind(r.return_type.to_db_str())
+        .bind(&r.quarter)
+        .bind(&r.fiscal_year)
+        .bind(r.status.to_db_str())
+        .bind(r.due_date)
+        .bind(r.filed_date)
+        .bind(&r.acknowledgment_no)
+        .bind(r.total_deductions)
+        .bind(r.total_deposits)
+        .bind(&r.json_data)
+        .bind(r.audit.created_by)
+        .bind(r.audit.updated_by)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Insert a deduction row inside a TDS return (immutable fact row).
+    pub async fn insert_tds_return_detail(&self, d: &TdsReturnDetail) -> Result<(), TaxError> {
+        sqlx::query(
+            r#"
+            INSERT INTO tds_return_details (
+                tds_return_detail_id, tenant_id, tds_return_id, vendor_id, employee_id, pan,
+                section, payment_date, payment_amount, tds_rate, tds_amount,
+                surcharge, cess, total_tds, challan_details, salary_month
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+            "#,
+        )
+        .bind(d.tds_return_detail_id.as_uuid())
+        .bind(d.tenant_id.as_uuid())
+        .bind(d.tds_return_id)
+        .bind(d.vendor_id)
+        .bind(d.employee_id)
+        .bind(&d.pan)
+        .bind(&d.section)
+        .bind(d.payment_date)
+        .bind(d.payment_amount)
+        .bind(d.tds_rate)
+        .bind(d.tds_amount)
+        .bind(d.surcharge)
+        .bind(d.cess)
+        .bind(d.total_tds)
+        .bind(&d.challan_details)
+        .bind(d.salary_month)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn find_tds_return(
+        &self,
+        tenant_id: Uuid,
+        return_id: Uuid,
+    ) -> Result<Option<TdsReturn>, TaxError> {
+        let row = sqlx::query_as::<_, TdsReturnRow>(
+            r#"
+            SELECT tds_return_id, tenant_id, entity_id, return_type, quarter, fiscal_year,
+                   status, due_date, filed_date, acknowledgment_no,
+                   total_deductions, total_deposits, json_data,
+                   created_at, created_by, updated_at, updated_by
+            FROM tds_returns
+            WHERE tenant_id = $1 AND tds_return_id = $2
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(return_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(TdsReturnRow::into_model))
+    }
+
+    /// Find an existing return by its natural key (the idempotency key of
+    /// `GenerateTdsReturn`).
+    pub async fn find_tds_return_by_key(
+        &self,
+        tenant_id: Uuid,
+        entity_id: Uuid,
+        return_type: TdsReturnType,
+        quarter: &str,
+        fiscal_year: &str,
+    ) -> Result<Option<TdsReturn>, TaxError> {
+        let row = sqlx::query_as::<_, TdsReturnRow>(
+            r#"
+            SELECT tds_return_id, tenant_id, entity_id, return_type, quarter, fiscal_year,
+                   status, due_date, filed_date, acknowledgment_no,
+                   total_deductions, total_deposits, json_data,
+                   created_at, created_by, updated_at, updated_by
+            FROM tds_returns
+            WHERE tenant_id = $1 AND entity_id = $2 AND return_type = $3
+              AND quarter = $4 AND fiscal_year = $5
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(entity_id)
+        .bind(return_type.to_db_str())
+        .bind(quarter)
+        .bind(fiscal_year)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(TdsReturnRow::into_model))
+    }
+
+    /// List TDS returns for an entity, optionally by fiscal year (spec
+    /// `GetTdsReturns(entity, fy)`).
+    pub async fn list_tds_returns(
+        &self,
+        tenant_id: Uuid,
+        entity_id: Option<Uuid>,
+        fiscal_year: Option<&str>,
+    ) -> Result<Vec<TdsReturn>, TaxError> {
+        let rows = match (entity_id, fiscal_year) {
+            (Some(eid), Some(fy)) => {
+                sqlx::query_as::<_, TdsReturnRow>(
+                    r#"
+                    SELECT tds_return_id, tenant_id, entity_id, return_type, quarter, fiscal_year,
+                           status, due_date, filed_date, acknowledgment_no,
+                           total_deductions, total_deposits, json_data,
+                           created_at, created_by, updated_at, updated_by
+                    FROM tds_returns
+                    WHERE tenant_id = $1 AND entity_id = $2 AND fiscal_year = $3
+                    ORDER BY quarter, return_type
+                    "#,
+                )
+                .bind(tenant_id)
+                .bind(eid)
+                .bind(fy)
+                .fetch_all(&self.pool)
+                .await?
+            }
+            (Some(eid), None) => {
+                sqlx::query_as::<_, TdsReturnRow>(
+                    r#"
+                    SELECT tds_return_id, tenant_id, entity_id, return_type, quarter, fiscal_year,
+                           status, due_date, filed_date, acknowledgment_no,
+                           total_deductions, total_deposits, json_data,
+                           created_at, created_by, updated_at, updated_by
+                    FROM tds_returns
+                    WHERE tenant_id = $1 AND entity_id = $2
+                    ORDER BY fiscal_year DESC, quarter, return_type
+                    "#,
+                )
+                .bind(tenant_id)
+                .bind(eid)
+                .fetch_all(&self.pool)
+                .await?
+            }
+            (None, _) => {
+                sqlx::query_as::<_, TdsReturnRow>(
+                    r#"
+                    SELECT tds_return_id, tenant_id, entity_id, return_type, quarter, fiscal_year,
+                           status, due_date, filed_date, acknowledgment_no,
+                           total_deductions, total_deposits, json_data,
+                           created_at, created_by, updated_at, updated_by
+                    FROM tds_returns
+                    WHERE tenant_id = $1
+                    ORDER BY fiscal_year DESC, quarter, return_type
+                    "#,
+                )
+                .bind(tenant_id)
+                .fetch_all(&self.pool)
+                .await?
+            }
+        };
+        Ok(rows.into_iter().map(TdsReturnRow::into_model).collect())
+    }
+
+    pub async fn list_tds_return_details(
+        &self,
+        tenant_id: Uuid,
+        return_id: Uuid,
+    ) -> Result<Vec<TdsReturnDetail>, TaxError> {
+        let rows = sqlx::query_as::<_, TdsReturnDetailRow>(
+            r#"
+            SELECT tds_return_detail_id, tenant_id, tds_return_id, vendor_id, employee_id, pan,
+                   section, payment_date, payment_amount, tds_rate, tds_amount,
+                   surcharge, cess, total_tds, challan_details, salary_month, created_at
+            FROM tds_return_details
+            WHERE tenant_id = $1 AND tds_return_id = $2
+            ORDER BY payment_date
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(return_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(TdsReturnDetailRow::into_model).collect())
+    }
+
+    /// Persist a filing transition: GENERATED → FILED / FILED_WITH_ERRORS
+    /// with the acknowledgment number (state check owned by the command).
+    pub async fn update_tds_return_filed(
+        &self,
+        tenant_id: Uuid,
+        return_id: Uuid,
+        status: TdsReturnStatus,
+        acknowledgment_no: &str,
+        filed_date: NaiveDate,
+        filed_by: Uuid,
+    ) -> Result<(), TaxError> {
+        sqlx::query(
+            r#"
+            UPDATE tds_returns
+            SET status = $3, acknowledgment_no = $4, filed_date = $5,
+                updated_at = now(), updated_by = $6, entity_version = entity_version + 1
+            WHERE tenant_id = $1 AND tds_return_id = $2
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(return_id)
+        .bind(status.to_db_str())
+        .bind(acknowledgment_no)
+        .bind(filed_date)
+        .bind(filed_by)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Advance the deduction deposit leg DEPOSITED → FILED for the
+    /// deductions covered by a filed return, and mirror the state on their
+    /// `tds_deposits` rows (deduction state machine PENDING → DEPOSITED →
+    /// FILED per spec).
+    pub async fn mark_deductions_filed(
+        &self,
+        tenant_id: Uuid,
+        deduction_ids: &[Uuid],
+        filed_date: NaiveDate,
+        filed_by: Uuid,
+    ) -> Result<(), TaxError> {
+        for id in deduction_ids {
+            sqlx::query(
+                r#"
+                UPDATE tds_deductions
+                SET tds_deposit_status = 'FILED', tds_return_filed_date = $3,
+                    updated_at = now(), updated_by = $4, entity_version = entity_version + 1
+                WHERE tenant_id = $1 AND tds_deduction_id = $2 AND tds_deposit_status = 'DEPOSITED'
+                "#,
+            )
+            .bind(tenant_id)
+            .bind(id)
+            .bind(filed_date)
+            .bind(filed_by)
+            .execute(&self.pool)
+            .await?;
+            sqlx::query(
+                r#"
+                UPDATE tds_deposits
+                SET status = 'FILED', updated_at = now(), updated_by = $3
+                WHERE tenant_id = $1 AND tds_deduction_id = $2 AND status = 'DEPOSITED'
+                "#,
+            )
+            .bind(tenant_id)
+            .bind(id)
+            .bind(filed_by)
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Find a Form 16 / Form 16A certificate (unique per tenant, FY,
+    /// employee/vendor).
+    pub async fn find_form16_certificate(
+        &self,
+        tenant_id: Uuid,
+        certificate_type: Form16CertificateType,
+        employee_id: Option<Uuid>,
+        vendor_id: Option<Uuid>,
+        fiscal_year: &str,
+    ) -> Result<Option<Form16Certificate>, TaxError> {
+        let row = sqlx::query_as::<_, Form16CertificateRow>(
+            r#"
+            SELECT form16_certificate_id, tenant_id, entity_id, certificate_type, fiscal_year,
+                   employee_id, vendor_id, pan, document_url, status, generated_by_id, issued_at,
+                   created_at, created_by, updated_at, updated_by
+            FROM form16_certificates
+            WHERE tenant_id = $1 AND certificate_type = $2 AND fiscal_year = $3
+              AND ($4::uuid IS NULL OR employee_id = $4)
+              AND ($5::uuid IS NULL OR vendor_id = $5)
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(certificate_type.to_db_str())
+        .bind(fiscal_year)
+        .bind(employee_id)
+        .bind(vendor_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(Form16CertificateRow::into_model))
+    }
+
+    /// Insert a Form 16 / Form 16A certificate record.
+    pub async fn insert_form16_certificate(&self, c: &Form16Certificate) -> Result<(), TaxError> {
+        sqlx::query(
+            r#"
+            INSERT INTO form16_certificates (
+                form16_certificate_id, tenant_id, entity_id, certificate_type, fiscal_year,
+                employee_id, vendor_id, pan, document_url, status, generated_by_id,
+                created_by, updated_by
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+            "#,
+        )
+        .bind(c.form16_certificate_id.as_uuid())
+        .bind(c.tenant_id.as_uuid())
+        .bind(c.entity_id)
+        .bind(c.certificate_type.to_db_str())
+        .bind(&c.fiscal_year)
+        .bind(c.employee_id)
+        .bind(c.vendor_id)
+        .bind(&c.pan)
+        .bind(&c.document_url)
+        .bind(c.status.to_db_str())
+        .bind(c.generated_by_id)
+        .bind(c.audit.created_by)
+        .bind(c.audit.updated_by)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// The entity's registered state (name) — used for the GSTIN state-code
+    /// match in `RegisterGstin` (mapped to a 2-digit code via
+    /// `tax.state_code_map`).
+    pub async fn entity_state(&self, tenant_id: Uuid, entity_id: Uuid) -> Result<Option<String>, TaxError> {
+        let row: Option<(Option<String>,)> = sqlx::query_as(
+            r#"
+            SELECT state FROM entities
+            WHERE tenant_id = $1 AND entity_id = $2 AND deleted_at IS NULL
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(entity_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.and_then(|r| r.0))
+    }
+
+    /// A vendor's PAN (Form 16/16A subjects are vendor-master rows — salary
+    /// employees are modelled as vendors with a PAN).
+    pub async fn vendor_pan(&self, tenant_id: Uuid, vendor_id: Uuid) -> Result<Option<String>, TaxError> {
+        let row: Option<(Option<String>,)> = sqlx::query_as(
+            r#"
+            SELECT pan FROM vendors
+            WHERE tenant_id = $1 AND vendor_id = $2 AND deleted_at IS NULL
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(vendor_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.and_then(|r| r.0))
+    }
+
+    /// Annual turnover band (paise) from posted GL aggregates over a fiscal
+    /// year — the GSTR-9 / GSTR-9C applicability input (> ₹2 Cr / > ₹5 Cr).
+    pub async fn annual_turnover(
+        &self,
+        tenant_id: Uuid,
+        entity_id: Uuid,
+        from: NaiveDate,
+        to: NaiveDate,
+    ) -> Result<i64, TaxError> {
+        let row: Option<(Option<i64>,)> = sqlx::query_as(
+            r#"
+            SELECT SUM(GREATEST(COALESCE(l.credit_amount, 0) - COALESCE(l.debit_amount, 0), 0))
+            FROM journal_entry_lines l
+            JOIN journal_entries je ON je.journal_id = l.journal_id
+            JOIN chart_of_accounts a ON a.account_id = l.account_id
+            WHERE je.status = 'POSTED'
+              AND je.tenant_id = $1
+              AND je.entity_id = $2
+              AND je.posting_date BETWEEN $3 AND $4
+              AND a.tenant_id = $1
+              AND a.gst_classification IS NOT NULL
+              AND a.deleted_at IS NULL
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(entity_id)
+        .bind(from)
+        .bind(to)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.and_then(|r| r.0).unwrap_or(0))
+    }
+
     // ── Trust exemption & income tax compliance ─────────────────────
+
 
     pub async fn find_trust_exemption(
         &self,
