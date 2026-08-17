@@ -37,3 +37,8 @@ cargo check
 - `rustup default stable` fails due to /home disk space during component installation.
 - If `~/.cargo` exists and fills up, delete it and recreate the symlink.
 - After `cargo check`, clean up with `rm -rf /tmp/sutra-target`.
+- Cold builds on a fresh sandbox fail with `cannot find -lgcc` if the GCC dev
+  runtime is missing (`libgcc.a` absent from /usr/lib/gcc/x86_64-linux-gnu/13/).
+  Fix: `apt-get update && apt-get install -y libgcc-13-dev` (network to
+  archive.ubuntu.com is open; crates.io also works). Then rerun cargo check.
+

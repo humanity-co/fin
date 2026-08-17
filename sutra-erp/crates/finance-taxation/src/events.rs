@@ -42,6 +42,23 @@ pub enum TaxationEventData {
         itc_claimed: i64,
         occurred_at: DateTime<Utc>,
     },
+    /// Annual return (GSTR-9) — aggregated outward + inward supplies of
+    /// the FY, generated from the FY's GSTR-1 / GSTR-3B data.
+    Gstr9Generated {
+        return_id: String,
+        fiscal_year: String,
+        tax_liability: i64,
+        occurred_at: DateTime<Utc>,
+    },
+    /// Annual reconciliation statement (GSTR-9C) — turnover as per
+    /// audited books vs as per returns, with the difference.
+    Gstr9cGenerated {
+        return_id: String,
+        fiscal_year: String,
+        turnover_as_per_books: i64,
+        turnover_as_per_returns: i64,
+        occurred_at: DateTime<Utc>,
+    },
     GstReturnFiled {
         return_id: String,
         period: String,
@@ -227,6 +244,8 @@ fn event_type_name(event: &TaxationEventData) -> &'static str {
         TaxationEventData::GstRateUpdated { .. } => "GstRateUpdated",
         TaxationEventData::Gstr1Generated { .. } => "Gstr1Generated",
         TaxationEventData::Gstr3bGenerated { .. } => "Gstr3bGenerated",
+        TaxationEventData::Gstr9Generated { .. } => "Gstr9Generated",
+        TaxationEventData::Gstr9cGenerated { .. } => "Gstr9cGenerated",
         TaxationEventData::GstReturnFiled { .. } => "GstReturnFiled",
         TaxationEventData::RcmEntryCreated { .. } => "RcmEntryCreated",
         TaxationEventData::RcmItcClaimCapped { .. } => "RcmItcClaimCapped",
