@@ -1,7 +1,7 @@
 use sqlx::PgPool;
 use thiserror::Error;
 use uuid::Uuid;
-const PERMISSIONS: &[&str] = &["gl:coa:view","gl:coa:configure","gl:journal:view","gl:journal:create","gl:journal:approve","gl:journal:post","gl:period_close:execute","ar:fee_structure:view","ar:fee_structure:configure","ar:fee_collection:collect","ar:fee_collection:view","ar:receipt:cancel","ar:concession:create","ar:scholarship:create","ar:scholarship:approve","ar:refund:create","ar:refund:approve","ap:vendor:create","ap:po:create","ap:po:approve","ap:grn:create","ap:invoice:create","ap:invoice:approve","ap:payment:create","ap:payment:approve","ap:reimbursement:create","ap:reimbursement:approve","treasury:bank_account:view","treasury:bank_account:configure","treasury:reconciliation:perform","treasury:reconciliation:approve","treasury:transfer:create","treasury:transfer:approve","treasury:bank_statement:upload","treasury:bank_statement:view","treasury:gateway:configure","treasury:petty_cash:create","tax:return:view","tax:gst_return:prepare","tax:gst_return:file","tax:tds:deduct","tax:config:configure","tax:exemption:register","tax:form16:generate","tax:income:compute","tax:itc:compute","tax:itc:reverse","tax:tds:deposit","tax:tds_return:prepare","budget:budget:view","budget:budget:create","budget:budget:approve","budget:revision:create","budget:encumbrance:view","reports:financial:view","reports:statutory:view","reports:dashboard:view","reports:export","workflow:approval_queue:view","workflow:approval:action","workflow:rule:configure","workflow:exception:handle","admin:user:manage","admin:role:manage","admin:config:manage","admin:audit_log:view","admin:entity:manage"];
+const PERMISSIONS: &[&str] = &["gl:coa:view","gl:coa:configure","gl:journal:view","gl:journal:create","gl:journal:approve","gl:journal:post","gl:period_close:execute","ar:fee_structure:view","ar:fee_structure:configure","ar:fee_collection:collect","ar:fee_collection:view","ar:receipt:cancel","ar:concession:create","ar:scholarship:create","ar:scholarship:approve","ar:refund:create","ar:refund:approve","ap:vendor:create","ap:po:create","ap:po:approve","ap:grn:create","ap:invoice:create","ap:invoice:approve","ap:payment:create","ap:payment:approve","ap:reimbursement:create","ap:reimbursement:approve","treasury:bank_account:view","treasury:bank_account:configure","treasury:reconciliation:perform","treasury:reconciliation:approve","treasury:transfer:create","treasury:transfer:approve","treasury:bank_statement:upload","treasury:bank_statement:view","treasury:gateway:configure","treasury:petty_cash:create","tax:return:view","tax:gst_return:prepare","tax:gst_return:file","tax:tds:deduct","tax:config:configure","tax:exemption:register","tax:form16:generate","tax:income:compute","tax:itc:compute","tax:itc:reverse","tax:tds:deposit","tax:tds_return:prepare","tax:tds_return:file","budget:budget:view","budget:budget:create","budget:budget:approve","budget:revision:create","budget:encumbrance:view","reports:financial:view","reports:statutory:view","reports:dashboard:view","reports:export","workflow:approval_queue:view","workflow:approval:action","workflow:rule:configure","workflow:exception:handle","admin:user:manage","admin:role:manage","admin:config:manage","admin:audit_log:view","admin:entity:manage"];
 /// Tax-module role grants per rbac-extension.md role matrix (scope is set on
 /// `user_roles.scope_type` at assignment, so grants here are scope-agnostic).
 ///   CFO               — all 7 (GLOBAL)
@@ -20,6 +20,7 @@ const TAX_ROLE_GRANTS: &[(&str, &[&str])] = &[
             "tax:itc:reverse",
             "tax:tds:deposit",
             "tax:tds_return:prepare",
+            "tax:tds_return:file",
             "tax:form16:generate",
             "tax:income:compute",
             "tax:exemption:register",
@@ -44,6 +45,11 @@ const TAX_ROLE_GRANTS: &[(&str, &[&str])] = &[
             "tax:tds_return:prepare",
             "tax:form16:generate",
         ],
+    ),
+    // Compliance Officer — ratified TDS-return filing holder (rbac-extension.md §2).
+    (
+        "compliance",
+        &["tax:tds_return:file"],
     ),
 ];
 #[derive(Debug, Error)] pub enum SeedError { #[error(transparent)] Db(#[from] sqlx::Error) }

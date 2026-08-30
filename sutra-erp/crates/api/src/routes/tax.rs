@@ -46,57 +46,67 @@ use sutra_rbac::UserContext;
 use crate::state::AppState;
 
 /// Build the Tax routes sub-router (nested at `/api/v1/tax`).
+///
+/// Paths follow the canonical Tax API contract in `module-specs.md` (API
+/// Contract table). Every handler body maps 1:1 onto the existing Phase
+/// 2/3a command/query handlers — no business logic is duplicated here.
+/// A few legacy-phase aliases are retained for read/diagnostic endpoints
+/// only where they cannot create ambiguous Axum routes; the canonical paths
+/// below are guaranteed present.
 pub fn tax_routes() -> Router<Arc<AppState>> {
     Router::new()
-        // ── GSTIN / configuration ─────────────────────────────────────
-        .route("/gstin", get(get_gst_registrations))
-        .route("/gstin/register", post(register_gstin))
-        .route("/rates", get(get_gst_rates).put(upsert_gst_rate))
+        // ── GST: registrations, rates ─────────────────────────────────
+        .route("/gst/registrations", get(get_gst_registrations).post(register_gstin))
+        .route("/gst/rates", get(get_gst_rates).post(upsert_gst_rate))
+        // ── GST: ITC ──────────────────────────────────────────────────
+        .route("/gst/itc/register", get(get_itc_register))
+        .route("/gst/itc/compute", post(compute_itc))
+        .route("/gst/itc/rule42", post(compute_rule42_reversal))
+        .route("/gst/itc/rule43", post(compute_rule43_reversal))
+        .route("/gst/itc/reverse", post(reverse_itc))
+        .route("/gst/itc/summary", get(get_itc_summary)) // legacy alias
+        // ── GST: returns ──────────────────────────────────────────────
+        .route("/gst/returns/gstr1/generate", post(generate_gstr1))
+        .route("/gst/returns/gstr1/preview", get(get_gstr_preview))
+        .route("/gst/returns/gstr3b/generate", post(generate_gstr3b))
+        .route("/gst/returns/gstr9/generate", post(generate_gstr9)) // legacy alias
+        .route("/gst/returns/gstr9c/generate", post(generate_gstr9c)) // legacy alias
+        .route("/gst/returns/:id/file", post(record_gst_filing))
+        // ── GST: RCM ──────────────────────────────────────────────────
+        .route("/gst/rcm/create", post(create_rcm_entry))
+        .route("/gst/rcm/payable", get(get_rcm_payable))
+        // ── GST: reports ──────────────────────────────────────────────
+        .route("/gst/reports/liability", get(get_gst_liability_summary))
         // ── TDS ───────────────────────────────────────────────────────
-        .route("/tds/register", get(get_tds_register))
-        .route("/tds/deposits/pending", get(get_pending_tds_deposits))
-        .route("/tds/deposit", post(deposit_tds_to_govt))
         .route("/tds/sections", get(get_tds_sections))
-        .route("/tds/sections/configure", put(configure_tds_section))
+        .route("/tds/sections/:code", put(configure_tds_section))
+        .route("/tds/register", get(get_tds_register))
+        .route("/tds/pending-deposits", get(get_pending_tds_deposits))
+        .route("/tds/deposit", post(deposit_tds_to_govt))
         .route("/tds/returns", get(get_tds_returns))
-        .route("/tds/returns/{id}", get(get_tds_return))
+        .route("/tds/returns/:id", get(get_tds_return))
         .route("/tds/returns/generate", post(generate_tds_return))
-        .route("/tds/returns/file", post(file_tds_return))
-        .route("/tds/form16", get(get_form16_certificate).post(generate_form16))
-        .route("/tds/form16a", get(get_form16a_certificate).post(generate_form16a))
-        // ── ITC / RCM ─────────────────────────────────────────────────
-        .route("/itc/register", get(get_itc_register))
-        .route("/itc/summary", get(get_itc_summary))
-        .route("/itc/compute", post(compute_itc))
-        .route("/itc/reversal/rule42", post(compute_rule42_reversal))
-        .route("/itc/reversal/rule43", post(compute_rule43_reversal))
-        .route("/itc/reverse", post(reverse_itc))
-        .route("/rcm/payable", get(get_rcm_payable))
-        .route("/rcm", post(create_rcm_entry))
-        // ── GSTR ──────────────────────────────────────────────────────
-        .route("/gst/preview", get(get_gstr_preview))
-        .route("/gst/liability", get(get_gst_liability_summary))
-        .route("/gst/generate/1", post(generate_gstr1))
-        .route("/gst/generate/3b", post(generate_gstr3b))
-        .route("/gst/generate/9", post(generate_gstr9))
-        .route("/gst/generate/9c", post(generate_gstr9c))
-        .route("/gst/file", post(record_gst_filing))
+        .route("/tds/returns/:id/file", post(file_tds_return))
+        .route("/tds/form16", get(get_form16_certificate)) // legacy read alias
+        .route("/tds/form16/generate", post(generate_form16))
+        .route("/tds/form16a", get(get_form16a_certificate)) // legacy read alias
+        .route("/tds/form16a/generate", post(generate_form16a))
         // ── Income / trust / exemption ────────────────────────────────
-        .route("/income/exemptions", get(get_trust_exemption))
+        .route("/income/exemptions", get(get_trust_exemption)) // legacy read alias
         .route("/income/exemption", post(register_trust_exemption))
-        .route("/income/exemption/renew", post(renew_exemption))
+        .route("/income/exemption/:id/renew", post(renew_exemption))
         .route("/income/application", get(get_income_application))
-        .route("/income/compute", post(compute_income_application))
-        .route("/income/accumulated", get(get_accumulated_income))
-        .route("/income/section115", get(get_section115_compliance))
-        .route("/income/investments/flag", post(flag_non_compliant_investments))
-        .route("/income/itr7", get(get_itr7_data))
+        .route("/income/application/compute", post(compute_income_application))
+        .route("/income/accumulated", get(get_accumulated_income)) // legacy read alias
+        .route("/income/section115", get(get_section115_compliance)) // legacy read alias
+        .route("/income/section115/check", post(flag_non_compliant_investments))
+        .route("/income/itr7-data", get(get_itr7_data))
         .route("/income/audit-requirements", get(get_audit_requirements))
         // ── FCRA ──────────────────────────────────────────────────────
-        .route("/fcra", get(get_fcra_status))
-        .route("/fcra/compliance", get(get_fcra_compliance))
-        .route("/fcra/register", post(register_fcra))
-        .route("/fcra/compute", post(compute_fcra_compliance))
+        .route("/income/fcra/register", post(register_fcra))
+        .route("/income/fcra/compliance", get(get_fcra_compliance))
+        .route("/income/fcra/status", get(get_fcra_status)) // legacy read alias
+        .route("/income/fcra/compute", post(compute_fcra_compliance)) // legacy alias
 }
 
 // ─── Query parameter types ─────────────────────────────────────────────
@@ -848,5 +858,21 @@ async fn compute_fcra_compliance(
     match handler.compute_fcra_compliance(tenant_of(&user), user.user_id, cmd).await {
         Ok(v) => Ok(Json(serde_json::to_value(v).unwrap())),
         Err(e) => Err(err_from(e)),
+    }
+}
+// ─── Route registration tests ──────────────────────────────────────────
+#[cfg(test)]
+mod route_tests {
+    use super::*;
+
+    /// Building the router validates every registered path for overlap.
+    /// Ambiguous routes (same method + overlapping path) panic at build
+    /// time, so this guarantees the canonical + legacy-alias route set is
+    /// unambiguous. Requires no DB — it only constructs the sub-router.
+    #[test]
+    fn tax_routes_build_without_ambiguity() {
+        // Constructing the sub-router runs axum's overlap checks; a
+        // conflict would panic here.
+        let _router = tax_routes();
     }
 }
