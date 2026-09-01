@@ -4,4 +4,5 @@ pub mod ap;
 pub mod ar;
 pub mod auth;
 pub mod gl;
+pub mod tax;
 pub mod treasury;

@@ -375,7 +375,7 @@ impl TdsSectionRow {
 
 /// A TDS deduction row — owned by AP (`tds_deductions`), read by tax for
 /// the deposit leg (`DepositTdsToGovt`), register and pending-deposits.
-#[derive(sqlx::FromRow, Debug, Clone)]
+#[derive(sqlx::FromRow, Debug, Clone, serde::Serialize)]
 pub struct TdsDeductionRow {
     pub tds_deduction_id: Uuid,
     pub tenant_id: Uuid,

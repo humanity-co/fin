@@ -2535,6 +2535,7 @@ dependencies = [
  "sutra-finance-ap",
  "sutra-finance-ar",
  "sutra-finance-gl",
+ "sutra-finance-taxation",
  "sutra-finance-treasury",
  "sutra-infrastructure",
  "sutra-rbac",

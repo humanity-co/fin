@@ -13,6 +13,7 @@ sutra-finance-gl = { path = "../finance-gl" }
 sutra-finance-ap = { path = "../finance-ap" }
 sutra-finance-ar = { path = "../finance-ar" }
 sutra-finance-treasury = { path = "../finance-treasury" }
+sutra-finance-taxation = { path = "../finance-taxation" }
 
 # HTTP
 axum.workspace = true
